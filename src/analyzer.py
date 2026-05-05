@@ -26,7 +26,11 @@ def analyze_changes(
 
     today_aum = today_snap["aum_100m"] or 0
     prev_aum = prev_snap["aum_100m"] or 0
-    aum_ratio = today_aum / prev_aum if prev_aum else 1.0
+
+    # Use median qty ratio of positions held on both days as the baseline
+    # creation/redemption factor. This is robust against the AUM header
+    # showing today's value for all historical dates.
+    baseline_ratio = _median_qty_ratio(today_map, prev_map)
 
     new_positions, closed_positions, intentional_changes, passive_changes = [], [], [], []
 
@@ -36,12 +40,12 @@ def analyze_changes(
             continue
 
         prev_h = prev_map[ticker]
-        expected_qty = prev_h["quantity"] * aum_ratio
+        expected_qty = prev_h["quantity"] * baseline_ratio
         actual_qty = today_h["quantity"]
         intentional_delta = actual_qty - expected_qty
         weight_change = today_h["weight_pct"] - prev_h["weight_pct"]
 
-        # Treat as intentional if quantity deviates >5% from AUM-scaled expectation
+        # Treat as intentional if quantity deviates >5% from baseline expectation
         if expected_qty > 0 and abs(intentional_delta / expected_qty) > 0.05:
             intentional_changes.append(
                 {
@@ -66,12 +70,26 @@ def analyze_changes(
         "date": today_date,
         "aum_today": today_aum,
         "aum_prev": prev_aum,
-        "aum_change_pct": (aum_ratio - 1) * 100,
+        "baseline_ratio": baseline_ratio,
         "new_positions": new_positions,
         "closed_positions": closed_positions,
         "intentional_changes": intentional_changes,
         "passive_changes": passive_changes,
     }
+
+
+def _median_qty_ratio(today_map: dict, prev_map: dict) -> float:
+    """Median of (today_qty / prev_qty) for positions held on both days.
+    Represents the baseline creation/redemption scaling factor."""
+    ratios = []
+    for ticker in today_map:
+        if ticker in prev_map and prev_map[ticker]["quantity"] > 0:
+            ratios.append(today_map[ticker]["quantity"] / prev_map[ticker]["quantity"])
+    if not ratios:
+        return 1.0
+    ratios.sort()
+    mid = len(ratios) // 2
+    return ratios[mid] if len(ratios) % 2 else (ratios[mid - 1] + ratios[mid]) / 2
 
 
 # ─── Claude API Calls ─────────────────────────────────────────────────────────
@@ -90,7 +108,7 @@ def generate_etf_report(changes: dict, prev_insight: str = "") -> str:
 
 ETF: {changes['etf_name']}
 날짜: {changes['date']}
-AUM: {changes['aum_prev']:.0f}억원 → {changes['aum_today']:.0f}억원 ({changes['aum_change_pct']:+.1f}%)
+베이스라인 비율(설정/해지): {changes.get('baseline_ratio', 1.0):.4f}
 
 변화 내역:
 {changes_summary}{prior_context}
@@ -135,7 +153,7 @@ def generate_etf_insight(etf_name: str, changes_list: list) -> str:
     # Use last 60 data points to stay within token limits
     recent = changes_list[-60:]
     history = "\n\n".join(
-        f"[{c['date']}] AUM변화: {c['aum_change_pct']:+.1f}%\n{_format_changes(c)}"
+        f"[{c['date']}] 베이스라인비율: {c.get('baseline_ratio', 1.0):.4f}\n{_format_changes(c)}"
         for c in recent
     )
     response = _get_client().messages.create(

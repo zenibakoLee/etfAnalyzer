@@ -25,7 +25,6 @@ async def main():
 
     setup_scheduler(send_report)
 
-    # Minimal HTTP server for Railway health checks
     app = web.Application()
     app.router.add_get("/health", health)
     runner = web.AppRunner(app)
@@ -38,5 +37,11 @@ async def main():
     await bot.start(DISCORD_BOT_TOKEN)
 
 
-if __name__ == "__main__":
+def _run():
+    """Called by watchfiles subprocess on each restart."""
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    from watchfiles import run_process
+    run_process("src/", target=_run)

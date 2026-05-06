@@ -403,9 +403,31 @@ async def _generate_and_send_report(message: discord.Message, etf: dict):
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 async def _send_chunked(channel, text: str):
-    for i in range(0, len(text), CHUNK_SIZE):
-        await channel.send(text[i: i + CHUNK_SIZE])
-        if i + CHUNK_SIZE < len(text):
+    if len(text) <= CHUNK_SIZE:
+        await channel.send(text)
+        return
+
+    # Split at newline boundaries to avoid cutting mid-sentence
+    chunks: list[str] = []
+    current = ""
+    for line in text.split("\n"):
+        candidate = (current + "\n" + line) if current else line
+        if len(candidate) <= CHUNK_SIZE:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            # Single line longer than CHUNK_SIZE — hard split
+            while len(line) > CHUNK_SIZE:
+                chunks.append(line[:CHUNK_SIZE])
+                line = line[CHUNK_SIZE:]
+            current = line
+    if current:
+        chunks.append(current)
+
+    for i, chunk in enumerate(chunks):
+        await channel.send(chunk)
+        if i < len(chunks) - 1:
             await asyncio.sleep(0.3)
 
 

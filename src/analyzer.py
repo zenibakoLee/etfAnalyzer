@@ -94,26 +94,7 @@ def _median_qty_ratio(today_map: dict, prev_map: dict) -> float:
 
 # ─── Claude API Calls ─────────────────────────────────────────────────────────
 
-def generate_etf_report(changes: dict, prev_insight: str = "") -> str:
-    changes_summary = _format_changes(changes)
-    prior_context = f"\n---\n과거 누적 인사이트:\n{prev_insight}" if prev_insight else ""
-
-    response = _get_client().messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=800,
-        messages=[
-            {
-                "role": "user",
-                "content": f"""당신은 ETF 포트폴리오 분석 전문가입니다. 아래 데이터를 기반으로 오늘의 변화를 분석해주세요.
-
-ETF: {changes['etf_name']}
-날짜: {changes['date']}
-베이스라인 비율(설정/해지): {changes.get('baseline_ratio', 1.0):.4f}
-
-변화 내역:
-{changes_summary}{prior_context}
-
-다음 형식으로 간결하게 한국어로 답변해주세요:
+_REPORT_SYSTEM = """당신은 ETF 포트폴리오 분석 전문가입니다. 주어진 ETF 보유종목 변화 데이터를 분석하고, 다음 형식으로 간결하게 한국어로 답변해주세요.
 
 **오늘의 주요 변화**
 - 신규 편입/청산/의도적 비중조절 핵심 내용 2-3줄
@@ -122,7 +103,45 @@ ETF: {changes['etf_name']}
 - 이 변화의 배경이나 의도 1-2줄
 
 **주목할 점**
-- 투자자 관점에서 주목할 1가지""",
+- 투자자 관점에서 주목할 1가지"""
+
+_HEADLINE_SYSTEM = """당신은 ETF 시장 전문가입니다. 여러 ETF의 당일 변화를 종합하여 오늘 시장의 큰 그림을 2-3문장으로 한국어로 요약해주세요. 어떤 섹터/테마가 부각되고 있는지, 전반적인 포지셔닝 변화가 무엇을 시사하는지 포함해주세요."""
+
+_INSIGHT_SYSTEM = """당신은 ETF 운용 전문가입니다. ETF의 누적 운용 이력을 분석하여 다음 형식으로 한국어로 인사이트를 도출해주세요.
+
+**운용 원칙 분석**
+이 ETF가 어떤 기준으로 종목을 선택하고 비중을 조절하는지
+
+**비중 원칙 변화 이력**
+시간에 따른 운용 스타일/원칙의 변화가 있다면
+
+**핵심 인사이트**
+이 ETF에 투자할 때 알아야 할 가장 중요한 3가지"""
+
+
+def generate_etf_report(changes: dict, prev_insight: str = "") -> str:
+    changes_summary = _format_changes(changes)
+    prior_context = f"\n---\n과거 누적 인사이트:\n{prev_insight}" if prev_insight else ""
+
+    response = _get_client().messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=800,
+        system=[
+            {
+                "type": "text",
+                "text": _REPORT_SYSTEM,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"ETF: {changes['etf_name']}\n"
+                    f"날짜: {changes['date']}\n"
+                    f"베이스라인 비율(설정/해지): {changes.get('baseline_ratio', 1.0):.4f}\n\n"
+                    f"변화 내역:\n{changes_summary}{prior_context}"
+                ),
             }
         ],
     )
@@ -136,13 +155,17 @@ def generate_market_headline(all_changes: list) -> str:
     response = _get_client().messages.create(
         model="claude-sonnet-4-6",
         max_tokens=300,
+        system=[
+            {
+                "type": "text",
+                "text": _HEADLINE_SYSTEM,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
         messages=[
             {
                 "role": "user",
-                "content": f"""다음 ETF들의 오늘 변화를 종합하여, 오늘 시장의 큰 그림을 2-3문장으로 한국어로 요약해주세요.
-어떤 섹터/테마가 부각되고 있는지, 전반적인 포지셔닝 변화가 무엇을 시사하는지 포함해주세요.
-
-{summaries}""",
+                "content": summaries,
             }
         ],
     )
@@ -159,24 +182,28 @@ def generate_etf_insight(etf_name: str, changes_list: list) -> str:
     response = _get_client().messages.create(
         model="claude-sonnet-4-6",
         max_tokens=3000,
+        system=[
+            {
+                "type": "text",
+                "text": _INSIGHT_SYSTEM,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
         messages=[
             {
                 "role": "user",
-                "content": f"""당신은 ETF 운용 전문가입니다. {etf_name}의 누적 운용 이력을 분석하여 인사이트를 도출해주세요.
-
-운용 이력 (최근 {len(recent)}회):
-{history}
-
-다음 형식으로 한국어로 답변해주세요:
-
-**운용 원칙 분석**
-이 ETF가 어떤 기준으로 종목을 선택하고 비중을 조절하는지
-
-**비중 원칙 변화 이력**
-시간에 따른 운용 스타일/원칙의 변화가 있다면
-
-**핵심 인사이트**
-이 ETF에 투자할 때 알아야 할 가장 중요한 3가지""",
+                "content": [
+                    {
+                        "type": "text",
+                        # Cache the large history block — helps on same-day retries
+                        "text": f"{etf_name} 운용 이력 (최근 {len(recent)}회):\n\n{history}",
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {
+                        "type": "text",
+                        "text": "위 이력을 바탕으로 분석해주세요.",
+                    },
+                ],
             }
         ],
     )

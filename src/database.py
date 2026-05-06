@@ -46,8 +46,16 @@ CREATE TABLE IF NOT EXISTS market_insights (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS no_data_dates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    etf_id INTEGER NOT NULL REFERENCES etfs(id),
+    date DATE NOT NULL,
+    UNIQUE(etf_id, date)
+);
+
 CREATE INDEX IF NOT EXISTS idx_snapshots_etf_date ON snapshots(etf_id, date);
 CREATE INDEX IF NOT EXISTS idx_holdings_snapshot ON holdings(snapshot_id);
+CREATE INDEX IF NOT EXISTS idx_no_data_etf_date ON no_data_dates(etf_id, date);
 """
 
 DEFAULT_ETFS = [
@@ -176,3 +184,23 @@ def get_latest_market_insight():
         return conn.execute(
             "SELECT * FROM market_insights ORDER BY date DESC LIMIT 1"
         ).fetchone()
+
+
+def save_no_data_date(etf_id: int, date: str):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO no_data_dates (etf_id, date) VALUES (?, ?)",
+            (etf_id, date),
+        )
+
+
+def get_known_dates(etf_id: int) -> set:
+    """Returns all dates that have been checked: either have a snapshot or confirmed no data."""
+    with get_conn() as conn:
+        snap_dates = {r["date"] for r in conn.execute(
+            "SELECT date FROM snapshots WHERE etf_id = ?", (etf_id,)
+        ).fetchall()}
+        no_data = {r["date"] for r in conn.execute(
+            "SELECT date FROM no_data_dates WHERE etf_id = ?", (etf_id,)
+        ).fetchall()}
+    return snap_dates | no_data

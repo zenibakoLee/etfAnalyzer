@@ -1,5 +1,6 @@
+import asyncio
 import logging
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from typing import Callable, Awaitable
 
 import pytz
@@ -11,10 +12,20 @@ from src.config import SCHEDULE_HOUR, SCHEDULE_MINUTE
 logger = logging.getLogger(__name__)
 KST = pytz.timezone("Asia/Seoul")
 
+BACKFILL_START = date(2023, 5, 16)
+_BACKFILL_DELAY = 0.5  # seconds between requests
+
 
 async def run_daily_job(send_fn: Callable[[str], Awaitable]):
     today = datetime.now(KST).date()
     today_str = str(today)
+
+    # Idempotency: skip if today's report was already generated
+    latest_market = db.get_latest_market_insight()
+    if latest_market and latest_market["date"] == today_str:
+        logger.info("Daily report already generated today, skipping")
+        return
+
     logger.info(f"Daily job started for {today_str}")
 
     etfs = db.get_all_etfs()
@@ -24,9 +35,13 @@ async def run_daily_job(send_fn: Callable[[str], Awaitable]):
     for etf in etfs:
         etf = dict(etf)
         try:
-            # ── Scrape ───────────────────────────────────────────────────────
+            # ── Backfill missing dates before today ───────────────────────
+            await _backfill_gaps(etf, today)
+
+            # ── Scrape today ──────────────────────────────────────────────
             data = scraper.fetch_holdings(etf["url"], today)
             if not data:
+                db.save_no_data_date(etf["id"], today_str)
                 logger.info(f"No data for {etf['name']} on {today_str} (weekend/holiday)")
                 continue
 
@@ -113,6 +128,44 @@ def _build_message(date_str: str, headline: str, sections: list) -> str:
         parts.append("━━━━━━━━━━━━━━━━━━━━━")
 
     return "\n".join(parts)
+
+
+async def _backfill_gaps(etf: dict, today: date):
+    """Scrape any missing weekday dates from BACKFILL_START up to yesterday."""
+    known = db.get_known_dates(etf["id"])
+    yesterday = today - timedelta(days=1)
+
+    missing = [
+        d for d in _daterange(BACKFILL_START, yesterday)
+        if str(d) not in known and d.weekday() < 5  # Mon–Fri only
+    ]
+
+    if not missing:
+        return
+
+    logger.info(f"Backfilling {len(missing)} missing dates for {etf['name']}")
+    for d in missing:
+        date_str = str(d)
+        try:
+            data = scraper.fetch_holdings(etf["url"], d)
+            if data:
+                db.save_snapshot(etf["id"], date_str, data["aum_100m"], data["holdings"])
+                logger.debug(f"  Backfilled {date_str}: {len(data['holdings'])} holdings")
+            else:
+                db.save_no_data_date(etf["id"], date_str)
+                logger.debug(f"  No data {date_str} (holiday)")
+        except Exception:
+            logger.exception(f"Backfill error for {etf['name']} on {date_str}")
+        await asyncio.sleep(_BACKFILL_DELAY)
+
+    logger.info(f"Backfill complete for {etf['name']}")
+
+
+def _daterange(start: date, end: date):
+    current = start
+    while current <= end:
+        yield current
+        current += timedelta(days=1)
 
 
 def setup_scheduler(send_fn: Callable[[str], Awaitable]) -> AsyncIOScheduler:

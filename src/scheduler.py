@@ -166,6 +166,65 @@ def _daterange(start: date, end: date):
         current += timedelta(days=1)
 
 
+def count_missing_dates(etf: dict) -> int:
+    """Return number of weekday dates missing from backfill_from to yesterday."""
+    today = datetime.now(KST).date()
+    yesterday = today - timedelta(days=1)
+    etf_start = date.fromisoformat(etf["backfill_from"]) if etf.get("backfill_from") else BACKFILL_START
+    known = db.get_known_dates(etf["id"])
+    return sum(
+        1 for d in _daterange(etf_start, yesterday)
+        if str(d) not in known and d.weekday() < 5
+    )
+
+
+async def run_startup_job(send_fn: Callable[[str], Awaitable]):
+    """Backfill gaps + generate today's report (if missing) + refresh insights if >7 days old."""
+    today = datetime.now(KST).date()
+    today_str = str(today)
+    logger.info(f"Startup job started for {today_str}")
+
+    # 1. Backfill + daily report (reuse run_daily_job but force re-run even if done today)
+    latest_market = db.get_latest_market_insight()
+    already_done = latest_market and latest_market["date"] == today_str
+    if already_done:
+        # Delete today's market insight to force re-run
+        import sqlite3
+        from src.config import DB_PATH
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("DELETE FROM market_insights WHERE date = ?", (today_str,))
+        conn.commit()
+        conn.close()
+
+    await run_daily_job(send_fn)
+
+    # 2. Refresh insights if latest is >7 days old
+    etfs = db.get_all_etfs()
+    insight_needed = []
+    for etf in etfs:
+        etf = dict(etf)
+        row = db.get_latest_insight(etf["id"])
+        if not row:
+            insight_needed.append(etf)
+        else:
+            from datetime import timedelta
+            last_date = date.fromisoformat(row["date"])
+            if (today - last_date).days > 7:
+                insight_needed.append(etf)
+
+    if insight_needed:
+        logger.info(f"Refreshing insights for {len(insight_needed)} ETFs")
+        for etf in insight_needed:
+            try:
+                all_snap_changes = _build_all_changes(etf)
+                if all_snap_changes:
+                    insight = analyzer.generate_etf_insight(etf["name"], all_snap_changes)
+                    db.save_insight(etf["id"], today_str, insight)
+                    logger.info(f"Startup insight refreshed for {etf['name']}")
+            except Exception:
+                logger.exception(f"Error refreshing insight for {etf['name']}")
+
+
 async def run_weekly_insight_job():
     """Generate and save cumulative insights for all ETFs. Runs every Sunday 10:00 KST."""
     today_str = str(datetime.now(KST).date())

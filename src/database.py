@@ -61,6 +61,11 @@ CREATE TABLE IF NOT EXISTS daily_reports (
     UNIQUE(etf_id, date)
 );
 
+CREATE TABLE IF NOT EXISTS user_preferences (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_snapshots_etf_date ON snapshots(etf_id, date);
 CREATE INDEX IF NOT EXISTS idx_holdings_snapshot ON holdings(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_no_data_etf_date ON no_data_dates(etf_id, date);
@@ -231,6 +236,22 @@ def get_latest_daily_report(etf_id: int):
             "SELECT * FROM daily_reports WHERE etf_id = ? ORDER BY date DESC LIMIT 1",
             (etf_id,),
         ).fetchone()
+
+
+def save_preference(key: str, value: str):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO user_preferences (key, value) VALUES (?, ?)",
+            (key, value),
+        )
+
+
+def get_preference(key: str) -> str | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT value FROM user_preferences WHERE key = ?", (key,)
+        ).fetchone()
+    return row["value"] if row else None
 
 
 def get_known_dates(etf_id: int) -> set:

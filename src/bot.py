@@ -248,52 +248,72 @@ async def _send_startup_status(channel):
 
     from src.scheduler import count_missing_dates
 
-    lines = [t("status_header", lang)]
-    needs_work = False
+    etfs = [dict(e) for e in db.get_all_etfs()]
+    ko = lang == "ko"
 
-    for etf in [dict(e) for e in db.get_all_etfs()]:
+    # Collect tasks per category
+    backfill_tasks: list[str] = []
+    report_tasks: list[str] = []
+    insight_tasks: list[str] = []
+
+    etf_lines: list[str] = []
+    for etf in etfs:
         snaps = db.get_all_snapshots(etf["id"])
         missing = count_missing_dates(etf)
         last = snaps[-1]["date"] if snaps else None
+        issues: list[str] = []
+
         if missing > 0:
-            needs_work = True
-            label = f"⚠️ {last or '?'} ({missing} {t('missing_days', lang)})"
+            backfill_tasks.append(f"  • {etf['name']}: {missing}{'일 누락' if ko else ' days missing'}")
+            issues.append(f"백필 {missing}{'일' if ko else 'd'} 누락")
+
+        # Report: only flag if today is NOT a confirmed no-data day
+        known = db.get_known_dates(etf["id"])
+        today_confirmed_no_data = (today_str in known and db.get_snapshot(etf["id"], today_str) is None)
+        latest_report = db.get_latest_daily_report(etf["id"])
+        if not today_confirmed_no_data and (not latest_report or latest_report["date"] != today_str):
+            report_tasks.append(f"  • {etf['name']}")
+            issues.append("리포트 미생성" if ko else "report missing")
+
+        # Insight: flag if missing or >7 days old
+        insight_row = db.get_latest_insight(etf["id"])
+        if not insight_row:
+            insight_tasks.append(f"  • {etf['name']}: {'인사이트 없음' if ko else 'no insight'}")
+            issues.append("인사이트 없음" if ko else "no insight")
+        elif (today - date.fromisoformat(insight_row["date"])).days > 7:
+            insight_tasks.append(f"  • {etf['name']}: 마지막 {insight_row['date']}" if ko
+                                  else f"  • {etf['name']}: last {insight_row['date']}")
+            issues.append(f"인사이트 오래됨({insight_row['date']})" if ko
+                          else f"insight stale({insight_row['date']})")
+
+        if issues:
+            etf_lines.append(f"⚠️ {etf['name']}: {', '.join(issues)}")
         else:
-            label = f"✅ {last or '?'} ({t('up_to_date', lang)})"
-        lines.append(f"• {etf['name']}: {label}")
+            etf_lines.append(f"✅ {etf['name']}: {'최신' if ko else 'up to date'}")
 
-    # Report status
-    today_reports = [
-        e for e in [dict(e) for e in db.get_all_etfs()]
-        if (r := db.get_latest_daily_report(e["id"])) and r["date"] == today_str
-    ]
-    if len(today_reports) < len(db.get_all_etfs()):
-        lines.append(t("report_missing", lang))
-        needs_work = True
-    else:
-        lines.append(t("report_done", lang))
+    header = t("status_header", lang)
+    body = "\n".join(etf_lines)
 
-    # Insight status
-    for etf in [dict(e) for e in db.get_all_etfs()]:
-        row = db.get_latest_insight(etf["id"])
-        if not row:
-            needs_work = True
-        else:
-            last_date = date.fromisoformat(row["date"])
-            if (today - last_date).days > 7:
-                needs_work = True
-                lines.append(t("insight_stale", lang, date=row["date"]))
-            else:
-                lines.append(t("insight_fresh", lang, date=row["date"]))
-        break  # show summary from first ETF only for brevity
+    needs_work = backfill_tasks or report_tasks or insight_tasks
+    if not needs_work:
+        await channel.send(f"{header}\n{body}\n\n{t('nothing_needed', lang)}")
+        return
 
-    if needs_work:
-        lines.append(t("ask_startup", lang))
-        await channel.send("\n".join(lines))
-        _user_states[DISCORD_USER_ID] = {"state": "awaiting_startup_confirm"}
-    else:
-        lines.append(t("nothing_needed", lang))
-        await channel.send("\n".join(lines))
+    # Build explicit task list
+    task_lines: list[str] = []
+    if backfill_tasks:
+        task_lines.append("📊 **백필 필요:**" if ko else "📊 **Backfill needed:**")
+        task_lines.extend(backfill_tasks)
+    if report_tasks:
+        task_lines.append("📋 **리포트 미생성:**" if ko else "📋 **Report missing:**")
+        task_lines.extend(report_tasks)
+    if insight_tasks:
+        task_lines.append("💡 **인사이트 갱신 필요:**" if ko else "💡 **Insight refresh needed:**")
+        task_lines.extend(insight_tasks)
+
+    ask = t("ask_startup", lang)
+    await channel.send(f"{header}\n{body}\n\n" + "\n".join(task_lines) + f"\n{ask}")
+    _user_states[DISCORD_USER_ID] = {"state": "awaiting_startup_confirm"}
 
 
 def _parse_language(content: str) -> str | None:

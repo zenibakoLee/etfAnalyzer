@@ -26,8 +26,8 @@ _CONFIRM_KEYWORDS = {"y", "yes", "네", "ㅇ", "응", "ㅇㅇ"}
 
 _T = {
     "greeting": {
-        "ko": "👋 안녕하세요! ETF Analyzer 봇이 시작되었습니다.",
-        "en": "👋 Hello! ETF Analyzer bot is online.",
+        "ko": "👋 안녕하세요! ETF Analyzer 봇이 시작되었습니다.\n\n📌 `/report` — ETF 일일 리포트 조회\n📌 `/insight` — 누적 운용 인사이트 조회",
+        "en": "👋 Hello! ETF Analyzer bot is online.\n\n📌 `/report` — view daily ETF report\n📌 `/insight` — view cumulative insight",
     },
     "ask_language": {
         "ko": "👋 Hello! ETF Analyzer bot is online.\n\nWhat language would you like to use?\n(e.g. Korean, 한국어, English, 영어...)",

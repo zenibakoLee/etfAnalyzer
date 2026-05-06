@@ -31,11 +31,30 @@ You need three things:
 - **Anthropic API Key** — Get one at [console.anthropic.com](https://console.anthropic.com)
 
 #### Discord Bot Setup
-1. Developer Portal → New Application → Bot tab → Copy Token
-2. On the Bot tab, enable **Message Content Intent**
-3. OAuth2 → URL Generator → `bot` scope → grant `Send Messages` and `Read Message History` permissions
-4. Use the generated URL to invite the bot to your server (or use DM-only mode)
-5. In Discord, right-click your profile → **Copy User ID** (requires Developer Mode)
+
+**Step 1 — Create a bot and get the token**
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications)
+2. Click **New Application** → enter a name → Create
+3. In the left sidebar, click **Bot**
+4. Under **Token**, click **Reset Token** → copy the token (this is your `DISCORD_BOT_TOKEN`)
+5. Scroll down to **Privileged Gateway Intents** and enable **Message Content Intent** → Save Changes
+
+**Step 2 — Generate a server invite URL**
+1. In the left sidebar, click **OAuth2**
+2. Select the **OAuth2 URL Generator** tab
+3. Under **SCOPES**, check `bot`
+4. Under **BOT PERMISSIONS** (appears after checking `bot`), check:
+   - `Send Messages`
+   - `Read Message History`
+   - `Read Messages/View Channels`
+5. Copy the **GENERATED URL** at the bottom → open it in a browser → select your server → Authorize
+
+> If you don't have a test server, create a new Discord server and invite the bot there.  
+> The bot must share a server with you to be able to send you DMs.
+
+**Step 3 — Find your user ID**
+1. Discord → Settings → Advanced → enable **Developer Mode**
+2. Right-click your profile → **Copy User ID** (this is your `DISCORD_USER_ID`)
 
 ### 2. Install
 

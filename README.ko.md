@@ -31,11 +31,31 @@ ETF 일별 보유종목 변화를 자동 분석하여 매일 아침 Discord DM�
 - **Anthropic API 키** — [console.anthropic.com](https://console.anthropic.com)에서 발급
 
 #### Discord 봇 설정 방법
-1. Developer Portal → New Application → Bot 탭 → Token 복사
-2. Bot 탭에서 **Message Content Intent** 활성화
-3. OAuth2 → URL Generator → `bot` 스코프 → `Send Messages`, `Read Message History` 권한 선택
-4. 생성된 URL로 봇을 내 서버에 초대 (또는 DM 전용으로 사용)
-5. Discord에서 내 프로필을 우클릭 → **사용자 ID 복사** (개발자 모드 필요)
+
+**Step 1 — 봇 생성 및 토큰 발급**
+1. [Discord Developer Portal](https://discord.com/developers/applications) 접속
+2. **New Application** → 이름 입력 → Create
+3. 왼쪽 사이드바 **Bot** 클릭
+4. **Token** 섹션에서 **Reset Token** → 토큰 복사 (`.env`의 `DISCORD_BOT_TOKEN`에 입력)
+5. 같은 페이지 아래 **Privileged Gateway Intents** 섹션에서  
+   **Message Content Intent** 스위치 켜기 → Save Changes
+
+**Step 2 — 서버 초대 URL 생성**
+1. 왼쪽 사이드바 **OAuth2** 클릭
+2. **OAuth2 URL Generator** 탭 선택
+3. **SCOPES** 에서 `bot` 체크
+4. 아래 나타나는 **BOT PERMISSIONS** 에서 다음 체크:
+   - `Send Messages`
+   - `Read Message History`
+   - `Read Messages/View Channels`
+5. 페이지 하단 **GENERATED URL** 복사 → 브라우저에서 열기 → 서버 선택 후 초대
+
+> 개인 테스트 서버가 없다면 Discord에서 새 서버를 하나 만들어 초대하면 됩니다.  
+> 봇이 서버에 있어야 DM을 보낼 수 있습니다.
+
+**Step 3 — 내 사용자 ID 확인**
+1. Discord → 설정 → 고급 → **개발자 모드** 켜기
+2. 내 프로필 우클릭 → **사용자 ID 복사** (`.env`의 `DISCORD_USER_ID`에 입력)
 
 ### 2. 설치
 

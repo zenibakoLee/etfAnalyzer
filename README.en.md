@@ -83,6 +83,12 @@ SCHEDULE_MINUTE=0
 
 ### 4. Run
 
+**Local development (recommended)** — auto-restarts on file changes:
+```bash
+python dev.py
+```
+
+**Production (Railway etc.)** — single run:
 ```bash
 python -m src.main
 ```
@@ -96,7 +102,7 @@ Starting Discord bot...
 Discord bot ready: YourBot#1234
 ```
 
-> **Port conflict**: Run `lsof -ti:8080 | xargs kill -9` or use `PORT=8081 python -m src.main`
+> **Port conflict**: Run `lsof -ti:8080 | xargs kill -9` or use `PORT=8081 python dev.py`
 
 ## Discord Commands
 

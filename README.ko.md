@@ -84,6 +84,12 @@ SCHEDULE_MINUTE=0
 
 ### 4. 실행
 
+**로컬 개발 (권장)** — 소스 변경 시 자동 재시작:
+```bash
+python dev.py
+```
+
+**프로덕션 (Railway 등)** — 단순 실행:
 ```bash
 python -m src.main
 ```
@@ -97,7 +103,7 @@ Starting Discord bot...
 Discord bot ready: YourBot#1234
 ```
 
-> **포트 충돌 시**: `lsof -ti:8080 | xargs kill -9` 또는 `PORT=8081 python -m src.main`
+> **포트 충돌 시**: `lsof -ti:8080 | xargs kill -9` 또는 `PORT=8081 python dev.py`
 
 ## Discord 명령어
 

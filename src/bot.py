@@ -427,9 +427,9 @@ async def _send_chunked(channel, text: str):
         await channel.send(text)
         return
 
-    # Split at newline boundaries to avoid cutting mid-sentence
     chunks: list[str] = []
     current = ""
+
     for line in text.split("\n"):
         candidate = (current + "\n" + line) if current else line
         if len(candidate) <= CHUNK_SIZE:
@@ -437,10 +437,11 @@ async def _send_chunked(channel, text: str):
         else:
             if current:
                 chunks.append(current)
-            # Single line longer than CHUNK_SIZE — hard split
+            # Line too long — split at sentence boundary first, then word, then hard
             while len(line) > CHUNK_SIZE:
-                chunks.append(line[:CHUNK_SIZE])
-                line = line[CHUNK_SIZE:]
+                cut = _find_split(line, CHUNK_SIZE)
+                chunks.append(line[:cut].rstrip())
+                line = line[cut:].lstrip()
             current = line
     if current:
         chunks.append(current)
@@ -449,6 +450,15 @@ async def _send_chunked(channel, text: str):
         await channel.send(chunk)
         if i < len(chunks) - 1:
             await asyncio.sleep(0.3)
+
+
+def _find_split(text: str, limit: int) -> int:
+    """Find best split position at or before limit: sentence > word > hard cut."""
+    for sep in (". ", "。", "! ", "? ", " "):
+        pos = text.rfind(sep, 0, limit)
+        if pos != -1:
+            return pos + len(sep)
+    return limit
 
 
 async def send_report(text: str):

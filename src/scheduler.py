@@ -70,11 +70,6 @@ async def run_daily_job(send_fn: Callable[[str], Awaitable]):
             etf_report = analyzer.generate_etf_report(changes, prev_insight)
             report_sections.append((etf["name"], etf["ticker"], etf_report))
 
-            # ── Update cumulative insight ─────────────────────────────────────
-            all_snap_changes = _build_all_changes(etf)
-            new_insight = analyzer.generate_etf_insight(etf["name"], all_snap_changes)
-            db.save_insight(etf["id"], today_str, new_insight)
-
         except Exception:
             logger.exception(f"Error processing ETF {etf['name']}")
 
@@ -170,6 +165,26 @@ def _daterange(start: date, end: date):
         current += timedelta(days=1)
 
 
+async def run_weekly_insight_job():
+    """Generate and save cumulative insights for all ETFs. Runs every Sunday 10:00 KST."""
+    today_str = str(datetime.now(KST).date())
+    logger.info(f"Weekly insight job started for {today_str}")
+
+    etfs = db.get_all_etfs()
+    for etf in etfs:
+        etf = dict(etf)
+        try:
+            all_snap_changes = _build_all_changes(etf)
+            if not all_snap_changes:
+                logger.info(f"No history for {etf['name']}, skipping insight")
+                continue
+            insight = analyzer.generate_etf_insight(etf["name"], all_snap_changes)
+            db.save_insight(etf["id"], today_str, insight)
+            logger.info(f"Weekly insight saved for {etf['name']}")
+        except Exception:
+            logger.exception(f"Error generating weekly insight for {etf['name']}")
+
+
 def setup_scheduler(send_fn: Callable[[str], Awaitable]) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=KST)
     scheduler.add_job(
@@ -181,6 +196,18 @@ def setup_scheduler(send_fn: Callable[[str], Awaitable]) -> AsyncIOScheduler:
         id="daily_etf_job",
         replace_existing=True,
     )
+    scheduler.add_job(
+        run_weekly_insight_job,
+        trigger="cron",
+        day_of_week="sun",
+        hour=10,
+        minute=0,
+        id="weekly_insight_job",
+        replace_existing=True,
+    )
     scheduler.start()
-    logger.info(f"Scheduler started: daily job at {SCHEDULE_HOUR:02d}:{SCHEDULE_MINUTE:02d} KST")
+    logger.info(
+        f"Scheduler started: daily={SCHEDULE_HOUR:02d}:{SCHEDULE_MINUTE:02d} KST, "
+        f"weekly insight=Sun 10:00 KST"
+    )
     return scheduler

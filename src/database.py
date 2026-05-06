@@ -124,8 +124,10 @@ def get_prev_snapshot(etf_id: int, before_date: str):
 
 def save_snapshot(etf_id: int, date: str, aum_100m, holdings_list: list):
     with get_conn() as conn:
+        # ON CONFLICT DO UPDATE avoids deleting the existing row (which would cascade-fail on holdings FK)
         conn.execute(
-            "INSERT OR REPLACE INTO snapshots (etf_id, date, aum_100m) VALUES (?, ?, ?)",
+            """INSERT INTO snapshots (etf_id, date, aum_100m) VALUES (?, ?, ?)
+               ON CONFLICT(etf_id, date) DO UPDATE SET aum_100m = excluded.aum_100m""",
             (etf_id, date, aum_100m),
         )
         snap = conn.execute(

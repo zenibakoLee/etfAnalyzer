@@ -68,6 +68,7 @@ async def run_daily_job(send_fn: Callable[[str], Awaitable]):
             prev_insight_row = db.get_latest_insight(etf["id"])
             prev_insight = prev_insight_row["insight_text"] if prev_insight_row else ""
             etf_report = analyzer.generate_etf_report(changes, prev_insight)
+            db.save_daily_report(etf["id"], today_str, etf_report)
             report_sections.append((etf["name"], etf["ticker"], etf_report))
 
         except Exception:

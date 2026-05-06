@@ -53,9 +53,18 @@ CREATE TABLE IF NOT EXISTS no_data_dates (
     UNIQUE(etf_id, date)
 );
 
+CREATE TABLE IF NOT EXISTS daily_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    etf_id INTEGER NOT NULL REFERENCES etfs(id),
+    date DATE NOT NULL,
+    report_text TEXT NOT NULL,
+    UNIQUE(etf_id, date)
+);
+
 CREATE INDEX IF NOT EXISTS idx_snapshots_etf_date ON snapshots(etf_id, date);
 CREATE INDEX IF NOT EXISTS idx_holdings_snapshot ON holdings(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_no_data_etf_date ON no_data_dates(etf_id, date);
+CREATE INDEX IF NOT EXISTS idx_daily_reports_etf_date ON daily_reports(etf_id, date);
 """
 
 # (id, name, ticker, url, backfill_from)
@@ -206,6 +215,22 @@ def save_no_data_date(etf_id: int, date: str):
             "INSERT OR IGNORE INTO no_data_dates (etf_id, date) VALUES (?, ?)",
             (etf_id, date),
         )
+
+
+def save_daily_report(etf_id: int, date: str, text: str):
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO daily_reports (etf_id, date, report_text) VALUES (?, ?, ?)",
+            (etf_id, date, text),
+        )
+
+
+def get_latest_daily_report(etf_id: int):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM daily_reports WHERE etf_id = ? ORDER BY date DESC LIMIT 1",
+            (etf_id,),
+        ).fetchone()
 
 
 def get_known_dates(etf_id: int) -> set:

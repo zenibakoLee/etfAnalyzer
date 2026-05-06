@@ -158,7 +158,7 @@ def generate_etf_insight(etf_name: str, changes_list: list) -> str:
     )
     response = _get_client().messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=1200,
+        max_tokens=3000,
         messages=[
             {
                 "role": "user",

@@ -58,8 +58,14 @@ CREATE INDEX IF NOT EXISTS idx_holdings_snapshot ON holdings(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_no_data_etf_date ON no_data_dates(etf_id, date);
 """
 
+# (id, name, ticker, url, backfill_from)
 DEFAULT_ETFS = [
-    (1, "TIME 글로벌AI인공지능액티브", "456600", "https://timeetf.co.kr/m11_view.php?idx=6"),
+    (1, "TIME 글로벌AI인공지능액티브", "456600", "https://timeetf.co.kr/m11_view.php?idx=6", "2023-05-16"),
+    (2, "TIME 미국나스닥100액티브", "426030", "https://timeetf.co.kr/m11_view.php?idx=2", "2022-05-11"),
+    (3, "TIME 코스피액티브", "385720", "https://timeetf.co.kr/m11_view.php?idx=11", "2021-05-25"),
+    (4, "iShares A.I. Innovation and Tech Active ETF", "BAI",
+     "https://www.ishares.com/us/products/339081/ishares-a-i-innovation-and-tech-active-etf/1467271812596.ajax?tab=holdings&fileType=csv",
+     "2024-10-21"),
 ]
 
 
@@ -82,10 +88,16 @@ def init_db():
     os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
     with get_conn() as conn:
         conn.executescript(SCHEMA)
-        for etf_id, name, ticker, url in DEFAULT_ETFS:
+        # Migration: add backfill_from column if not exists
+        try:
+            conn.execute("ALTER TABLE etfs ADD COLUMN backfill_from DATE DEFAULT '2023-05-16'")
+        except Exception:
+            pass  # Column already exists
+        for etf_id, name, ticker, url, backfill_from in DEFAULT_ETFS:
             conn.execute(
-                "INSERT OR IGNORE INTO etfs (id, name, ticker, url) VALUES (?, ?, ?, ?)",
-                (etf_id, name, ticker, url),
+                """INSERT OR IGNORE INTO etfs (id, name, ticker, url, backfill_from)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (etf_id, name, ticker, url, backfill_from),
             )
 
 

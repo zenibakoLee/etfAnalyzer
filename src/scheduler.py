@@ -131,12 +131,14 @@ def _build_message(date_str: str, headline: str, sections: list) -> str:
 
 
 async def _backfill_gaps(etf: dict, today: date):
-    """Scrape any missing weekday dates from BACKFILL_START up to yesterday."""
+    """Scrape any missing weekday dates from the ETF's backfill_from date up to yesterday."""
     known = db.get_known_dates(etf["id"])
     yesterday = today - timedelta(days=1)
 
+    etf_start = date.fromisoformat(etf["backfill_from"]) if etf.get("backfill_from") else BACKFILL_START
+
     missing = [
-        d for d in _daterange(BACKFILL_START, yesterday)
+        d for d in _daterange(etf_start, yesterday)
         if str(d) not in known and d.weekday() < 5  # Mon–Fri only
     ]
 

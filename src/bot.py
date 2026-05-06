@@ -30,8 +30,8 @@ _T = {
         "en": "👋 Hello! ETF Analyzer bot is online.",
     },
     "ask_language": {
-        "ko": "👋 Hello! ETF Analyzer bot is online.\n\nWhat language would you like to use?\n1. 한국어 (Korean)\n2. English",
-        "en": "👋 Hello! ETF Analyzer bot is online.\n\nWhat language would you like to use?\n1. 한국어 (Korean)\n2. English",
+        "ko": "👋 Hello! ETF Analyzer bot is online.\n\nWhat language would you like to use?\n(e.g. Korean, 한국어, English, 영어...)",
+        "en": "👋 Hello! ETF Analyzer bot is online.\n\nWhat language would you like to use?\n(e.g. Korean, 한국어, English, 영어...)",
     },
     "language_saved": {
         "ko": "✅ 언어가 한국어로 설정되었습니다.",
@@ -176,7 +176,7 @@ async def on_message(message: discord.Message):
                 await message.channel.send(t("language_saved", lang))
                 await _send_startup_status(message.channel)
             else:
-                await message.channel.send("Please reply with 1 (Korean) or 2 (English).")
+                await message.channel.send("Sorry, I couldn't recognize that. Try: Korean, 한국어, English, 영어...")
             return
 
         if state["state"] == "awaiting_startup_confirm":
@@ -297,10 +297,15 @@ async def _send_startup_status(channel):
 
 
 def _parse_language(content: str) -> str | None:
-    c = content.strip().lower()
-    if c in ("1", "한국어", "korean", "ko", "kr"):
+    # Korean characters present → Korean
+    if any('가' <= ch <= '힣' or 'ᄀ' <= ch <= 'ᇿ' for ch in content):
         return "ko"
-    if c in ("2", "english", "en", "영어"):
+    c = content.strip().lower()
+    _KO = {"korean", "korea", "ko", "kr", "한국어", "한국", "한글", "1"}
+    _EN = {"english", "english", "en", "eng", "states", "us", "america", "american", "영어", "2"}
+    if any(w in c for w in _KO):
+        return "ko"
+    if any(w in c for w in _EN):
         return "en"
     return None
 

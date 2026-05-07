@@ -42,7 +42,9 @@ async def run_daily_job(send_fn: Callable[[str], Awaitable]):
             data = scraper.fetch_holdings(etf["url"], today)
             if not data:
                 db.save_no_data_date(etf["id"], today_str)
-                logger.info(f"No data for {etf['name']} on {today_str} (weekend/holiday)")
+                logger.info(f"No data for {etf['name']} on {today_str}, trying latest snapshots")
+                # Fallback: generate report from most recent 2 snapshots
+                await _report_from_latest_snapshots(etf, today_str, report_sections)
                 continue
 
             db.save_snapshot(etf["id"], today_str, data["aum_100m"], data["holdings"])
@@ -118,12 +120,47 @@ def _build_message(date_str: str, headline: str, sections: list) -> str:
         parts.append(headline)
         parts.append("\n━━━━━━━━━━━━━━━━━━━━━")
 
-    for name, ticker, report in sections:
-        parts.append(f"\n📊 **{name}** ({ticker})")
+    for section in sections:
+        name, ticker, report = section[0], section[1], section[2]
+        ref_date = section[3] if len(section) > 3 else None
+        label = f"\n📊 **{name}** ({ticker})"
+        if ref_date:
+            label += f" _(데이터 기준: {ref_date})_"
+        parts.append(label)
         parts.append(report)
         parts.append("━━━━━━━━━━━━━━━━━━━━━")
 
     return "\n".join(parts)
+
+
+async def _report_from_latest_snapshots(etf: dict, today_str: str, report_sections: list):
+    """Generate a report from the two most recent snapshots when today's data is unavailable."""
+    snapshots = db.get_all_snapshots(etf["id"])
+    if len(snapshots) < 2:
+        return
+
+    latest_snap = dict(snapshots[-1])
+    prev_snap = dict(snapshots[-2])
+    ref_date = latest_snap["date"]
+
+    # Skip if already generated a report for today
+    existing = db.get_latest_daily_report(etf["id"])
+    if existing and existing["date"] == today_str:
+        report_sections.append((etf["name"], etf["ticker"], existing["report_text"], ref_date))
+        return
+
+    changes = analyzer.analyze_changes(
+        etf["name"], ref_date,
+        latest_snap, prev_snap,
+        db.get_holdings(latest_snap["id"]),
+        db.get_holdings(prev_snap["id"]),
+    )
+    prev_insight_row = db.get_latest_insight(etf["id"])
+    prev_insight = prev_insight_row["insight_text"] if prev_insight_row else ""
+    etf_report = analyzer.generate_etf_report(changes, prev_insight)
+    db.save_daily_report(etf["id"], today_str, etf_report)
+    report_sections.append((etf["name"], etf["ticker"], etf_report, ref_date))
+    logger.info(f"Fallback report generated for {etf['name']} (based on {ref_date})")
 
 
 async def _backfill_gaps(etf: dict, today: date):

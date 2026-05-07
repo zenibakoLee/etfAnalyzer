@@ -324,7 +324,7 @@ def generate_market_headline(all_changes: list) -> str:
     )
     response = _get_client().messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=300,
+        max_tokens=800,
         system=_HEADLINE_SYSTEM,
         messages=[
             {

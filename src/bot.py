@@ -1,11 +1,13 @@
 import asyncio
 import logging
+import time
 import pytz
 from datetime import datetime, date, timedelta
 
 import discord
+import httpx
 from src import analyzer, database as db
-from src.config import DISCORD_USER_ID
+from src.config import DISCORD_USER_ID, DISCORD_WEBHOOK_URL
 
 logger = logging.getLogger(__name__)
 KST = pytz.timezone("Asia/Seoul")
@@ -462,10 +464,43 @@ def _find_split(text: str, limit: int) -> int:
 
 
 async def send_report(text: str):
-    """Proactively send a DM report to the configured user."""
+    """Proactively send a DM report to the configured user and webhook."""
     try:
         user = await bot.fetch_user(DISCORD_USER_ID)
         await _send_chunked(user, text)
         logger.info("Daily report sent via DM")
     except Exception:
         logger.exception("Failed to send DM report")
+
+    if DISCORD_WEBHOOK_URL:
+        try:
+            await _send_webhook(text)
+            logger.info("Daily report sent via webhook")
+        except Exception:
+            logger.exception("Failed to send webhook report")
+
+
+async def _send_webhook(text: str):
+    chunks: list[str] = []
+    current = ""
+    for line in text.split("\n"):
+        candidate = (current + "\n" + line) if current else line
+        if len(candidate) <= CHUNK_SIZE:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            while len(line) > CHUNK_SIZE:
+                cut = _find_split(line, CHUNK_SIZE)
+                chunks.append(line[:cut].rstrip())
+                line = line[cut:].lstrip()
+            current = line
+    if current:
+        chunks.append(current)
+
+    async with httpx.AsyncClient() as client:
+        for i, chunk in enumerate(chunks):
+            resp = await client.post(DISCORD_WEBHOOK_URL, json={"content": chunk})
+            resp.raise_for_status()
+            if i < len(chunks) - 1:
+                await asyncio.sleep(0.5)

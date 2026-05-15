@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.etfanalyzer.bot</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/haejoonlee/.pyenv/versions/3.12.0/bin/python</string>
+        <string>-c</string>
+        <string>import asyncio; from src.main import main; asyncio.run(main())</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>/Users/haejoonlee/dev/etfAnalyzer</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/haejoonlee/dev/etfAnalyzer/logs/bot-launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/haejoonlee/dev/etfAnalyzer/logs/bot-launchd-err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/haejoonlee/.pyenv/versions/3.12.0/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

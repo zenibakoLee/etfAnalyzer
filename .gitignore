@@ -3,3 +3,9 @@ __pycache__/
 *.pyo
 .env
 .claude/
+logs/
+*.out
+data/*.db
+data/*.db-shm
+data/*.db-wal
+.DS_Store

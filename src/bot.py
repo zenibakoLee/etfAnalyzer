@@ -464,14 +464,7 @@ def _find_split(text: str, limit: int) -> int:
 
 
 async def send_report(text: str):
-    """Proactively send a DM report to the configured user and webhook."""
-    try:
-        user = await bot.fetch_user(DISCORD_USER_ID)
-        await _send_chunked(user, text)
-        logger.info("Daily report sent via DM")
-    except Exception:
-        logger.exception("Failed to send DM report")
-
+    """Send report via webhook."""
     if DISCORD_WEBHOOK_URL:
         try:
             await _send_webhook(text)

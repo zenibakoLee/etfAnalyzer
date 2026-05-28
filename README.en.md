@@ -8,17 +8,26 @@ It distinguishes intentional portfolio moves by the fund manager from passive ch
 - **Daily Auto Report** — Sends holdings change analysis to your Discord DM every day at 08:00 KST
 - **Intentional Change Detection** — Strips out creation/redemption noise to isolate the fund manager's actual buy/sell decisions
 - **Weekly Insights** — Every Sunday at 10:00 KST, generates and stores cumulative operational pattern analysis
+- **Returns Comparison** — `/returns` command for cross-ETF daily/weekly/monthly/quarterly/semi-annual/annual returns
+- **Benchmark Support** — VOO (S&P 500) and QQQ (Nasdaq 100) as benchmark ETFs in returns comparison
 - **On-demand Insight Query** — Type `/insight` in Discord DM to instantly retrieve the latest stored insight
 - **Auto Historical Backfill** — When a new ETF is added, automatically fills in missing historical data from the listing date
+- **yfinance Data Source** — US-listed ETFs fetch holdings and returns via yfinance API
 
 ## Supported ETFs
 
-| ETF | Ticker | Data Source |
-|-----|--------|-------------|
-| TIME Global AI Active ETF | 456600 | timeetf.co.kr |
-| TIME US Nasdaq 100 Active ETF | 426030 | timeetf.co.kr |
-| TIME KOSPI Active ETF | 385720 | timeetf.co.kr |
-| iShares A.I. Innovation and Tech Active ETF | BAI | iShares CSV API |
+| ETF | Ticker | Data Source | Type |
+|-----|--------|-------------|------|
+| TIME Global AI Active ETF | 456600 | timeetf.co.kr | Tracked |
+| TIME US Nasdaq 100 Active ETF | 426030 | timeetf.co.kr | Tracked |
+| TIME KOSPI Active ETF | 385720 | timeetf.co.kr | Tracked |
+| iShares A.I. Innovation and Tech Active ETF | BAI | iShares CSV API | Tracked |
+| Global X AI & Technology ETF | CHAT | yfinance | Tracked |
+| WisdomTree Artificial Intelligence & Innovation Fund | WTAI | yfinance | Tracked |
+| Vanguard S&P 500 ETF | VOO | yfinance | Benchmark |
+| Invesco QQQ Trust | QQQ | yfinance | Benchmark |
+
+Benchmark ETFs are included in returns comparison only; they are excluded from daily reports and insights.
 
 ## Quick Start
 
@@ -107,6 +116,7 @@ Send these commands to the bot via **DM**:
 | Command | Description |
 |---------|-------------|
 | `/insight` | Shows the ETF list, select a number to retrieve the latest insight |
+| `/returns` | Cross-ETF returns comparison (select period: 1W/1M/Q/6M/1Y) |
 
 ## How It Works
 
@@ -156,20 +166,23 @@ Add an entry to `DEFAULT_ETFS` in `src/database.py`:
 
 ```python
 DEFAULT_ETFS = [
-    # (id, name, ticker, url, backfill_from)
+    # (id, name, ticker, url, backfill_from, yf_ticker, benchmark)
     ...,
-    (5, "New ETF Name", "TICKER", "https://...", "YYYY-MM-DD"),
+    (9, "New ETF Name", "TICKER", "https://...", "YYYY-MM-DD", "YF_TICKER", 0),
 ]
 ```
 
 - **timeetf.co.kr ETFs**: URL format `https://timeetf.co.kr/m11_view.php?idx=N`
 - **iShares ETFs**: URL format `https://www.ishares.com/.../1467271812596.ajax?tab=holdings&fileType=csv`
+- **yfinance ETFs**: URL format `yfinance://TICKER` (US-listed ETFs)
+- **Benchmarks**: Set `benchmark=1` to include only in returns comparison
 
 ## Tech Stack
 
 - Python 3.10+, asyncio
 - discord.py, APScheduler, aiohttp
 - anthropic SDK (Claude claude-sonnet-4-6 with prompt caching)
+- yfinance (US ETF data)
 - SQLite, BeautifulSoup4
 
 ## License

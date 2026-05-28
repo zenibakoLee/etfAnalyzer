@@ -312,6 +312,8 @@ async def run_startup_job(send_fn: Callable[[str], Awaitable]):
     insight_needed = []
     for etf in etfs:
         etf = dict(etf)
+        if etf.get("benchmark"):
+            continue
         row = db.get_latest_insight(etf["id"])
         if not row:
             insight_needed.append(etf)
@@ -342,6 +344,8 @@ async def run_weekly_insight_job():
     etfs = db.get_all_etfs()
     for etf in etfs:
         etf = dict(etf)
+        if etf.get("benchmark"):
+            continue
         try:
             all_snap_changes = _build_all_changes(etf)
             if not all_snap_changes:

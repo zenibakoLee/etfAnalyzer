@@ -280,6 +280,9 @@ async def _send_startup_status(channel):
 
     etf_lines: list[str] = []
     for etf in etfs:
+        if etf.get("benchmark"):
+            etf_lines.append(f"📌 {etf['name']}: {'벤치마크' if ko else 'benchmark'}")
+            continue
         snaps = db.get_all_snapshots(etf["id"])
         missing = count_missing_dates(etf)
         last = snaps[-1]["date"] if snaps else None

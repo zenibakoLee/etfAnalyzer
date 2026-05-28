@@ -8,17 +8,26 @@ ETF 일별 보유종목 변화를 자동 분석하여 매일 아침 Discord DM�
 - **일일 자동 리포트** — 매일 08:00 KST, ETF 보유종목 변화 분석 결과를 Discord DM으로 전송
 - **의도적 변화 감지** — 설정/해지(creation/redemption) 영향을 제거하고 운용역의 순수한 매수/매도 식별
 - **주간 인사이트** — 매주 일요일 10:00 KST, 누적 이력 기반 운용 원칙 분석 및 저장
+- **수익률 비교** — `/returns` 명령어로 전 ETF 일간/주간/월간/분기/반기/연간 수익률 비교
+- **벤치마크 지원** — VOO(S&P 500), QQQ(Nasdaq 100)를 벤치마크로 수익률 비교에 포함
 - **온디맨드 인사이트 조회** — Discord에서 `/insight` 명령어로 최신 인사이트 즉시 확인
 - **이력 자동 백필** — 새 ETF 추가 시 등록일부터 누락 데이터 자동 수집
+- **yfinance 데이터 소스** — 미국 상장 ETF는 yfinance API를 통해 보유종목 및 수익률 자동 수집
 
 ## 지원 ETF
 
-| ETF | 티커 | 데이터 소스 |
-|-----|------|-------------|
-| TIME 글로벌AI인공지능액티브 | 456600 | timeetf.co.kr |
-| TIME 미국나스닥100액티브 | 426030 | timeetf.co.kr |
-| TIME 코스피액티브 | 385720 | timeetf.co.kr |
-| iShares A.I. Innovation and Tech Active ETF | BAI | iShares CSV API |
+| ETF | 티커 | 데이터 소스 | 유형 |
+|-----|------|-------------|------|
+| TIME 글로벌AI인공지능액티브 | 456600 | timeetf.co.kr | 분석 대상 |
+| TIME 미국나스닥100액티브 | 426030 | timeetf.co.kr | 분석 대상 |
+| TIME 코스피액티브 | 385720 | timeetf.co.kr | 분석 대상 |
+| iShares A.I. Innovation and Tech Active ETF | BAI | iShares CSV API | 분석 대상 |
+| Global X AI & Technology ETF | CHAT | yfinance | 분석 대상 |
+| WisdomTree Artificial Intelligence & Innovation Fund | WTAI | yfinance | 분석 대상 |
+| Vanguard S&P 500 ETF | VOO | yfinance | 벤치마크 |
+| Invesco QQQ Trust | QQQ | yfinance | 벤치마크 |
+
+벤치마크 ETF는 수익률 비교에만 사용되며, 일일 리포트/종합 인사이트에서는 제외됩니다.
 
 ## 빠른 시작
 
@@ -108,6 +117,7 @@ Discord bot ready: YourBot#1234
 | 명령어 | 설명 |
 |--------|------|
 | `/insight` | 등록된 ETF 목록 표시 후 번호 선택 → 최신 인사이트 조회 |
+| `/returns` | 전 ETF 수익률 비교 (기간 선택: 1주/1개월/분기/반기/연간) |
 
 ## 데이터 흐름
 
@@ -151,20 +161,23 @@ docs/
 
 ```python
 DEFAULT_ETFS = [
-    # (id, name, ticker, url, backfill_from)
+    # (id, name, ticker, url, backfill_from, yf_ticker, benchmark)
     ...,
-    (5, "새 ETF 이름", "티커", "https://...", "YYYY-MM-DD"),
+    (9, "새 ETF 이름", "티커", "https://...", "YYYY-MM-DD", "YF_TICKER", 0),
 ]
 ```
 
 - **timeetf.co.kr ETF**: URL 형식 `https://timeetf.co.kr/m11_view.php?idx=N`
 - **iShares ETF**: URL 형식 `https://www.ishares.com/.../1467271812596.ajax?tab=holdings&fileType=csv`
+- **yfinance ETF**: URL 형식 `yfinance://TICKER` (미국 상장 ETF)
+- **벤치마크**: `benchmark=1`로 설정하면 수익률 비교에만 포함
 
 ## 기술 스택
 
 - Python 3.10+, asyncio
 - discord.py, APScheduler, aiohttp
 - anthropic SDK (Claude claude-sonnet-4-6, 프롬프트 캐싱 적용)
+- yfinance (미국 ETF 데이터)
 - SQLite, BeautifulSoup4
 
 ## 라이선스

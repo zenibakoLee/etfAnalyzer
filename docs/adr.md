@@ -52,10 +52,40 @@
 
 ---
 
-## ADR-006: Railway 단일 asyncio 프로세스
+## ADR-006: 단일 asyncio 프로세스
 
 **결정**: APScheduler, Discord bot, aiohttp 헬스 서버를 단일 asyncio 이벤트 루프에서 실행한다.
 
-**배경**: Railway 무료 플랜 기준 단일 서비스 단위. 별도 worker 프로세스를 두면 배포 복잡도와 비용이 올라간다. 일 1회 배치 + 저빈도 DM이므로 단일 루프로 충분하다.
+**배경**: 단일 사용자, 단일 서비스 단위. 별도 worker 프로세스를 두면 배포 복잡도가 올라간다. 일 1회 배치 + 저빈도 DM이므로 단일 루프로 충분하다.
 
 **Trade-off**: 스크래핑/분석 중 블로킹 I/O가 Discord 응답성에 영향을 줄 수 있다. `requests`(동기)를 asyncio 루프 내에서 직접 호출 중이므로, ETF 수가 많아지면 `asyncio.to_thread` 또는 `aiohttp` 전환을 고려해야 한다.
+
+---
+
+## ADR-007: yfinance를 미국 ETF 데이터 소스로 사용
+
+**결정**: CHAT, WTAI 등 미국 ETF의 보유종목 데이터는 `yfinance` 라이브러리의 `Ticker.funds_data.top_holdings`를 통해 수집한다. URL은 `yfinance://TICKER` 형식으로 지정하며, `fetch_holdings()`가 이를 감지해 yfinance 핸들러로 디스패치한다. 모든 ETF의 일별 종가/수익률도 yfinance로 수집한다.
+
+**배경**: 미국 ETF 운용사 사이트는 스크래핑이 어렵거나 API가 없는 경우가 많다. yfinance는 무료이고 top 10 보유종목 및 가격 데이터를 안정적으로 제공한다. iShares CSV처럼 운용사 개별 포맷을 파싱할 필요가 없어 새 ETF 추가가 용이하다.
+
+**Trade-off**: yfinance는 top 10 보유종목만 제공하므로, 전체 포트폴리오 대비 커버리지가 제한적이다. 과거 보유종목 이력을 제공하지 않아 백필이 불가능하다. 비공식 라이브러리이므로 Yahoo Finance 정책 변경 시 차단될 수 있다.
+
+---
+
+## ADR-008: 벤치마크 ETF는 분석 대상에서 제외
+
+**결정**: `etfs` 테이블에 `benchmark` 컬럼(INTEGER DEFAULT 0)을 추가한다. `benchmark=1`인 ETF(VOO, QQQ)는 `run_daily_job`의 보유종목 분석/리포트 생성 루프에서 제외하되, 수익률 수집(`_collect_daily_returns`)에는 포함한다.
+
+**배경**: VOO, QQQ는 시장 벤치마크로서 수익률 비교 기준이 필요하지만, 패시브 인덱스 ETF의 보유종목 변화를 분석하는 것은 의미가 없다. Claude API 호출 비용도 절감된다.
+
+**Trade-off**: 벤치마크에 대한 인사이트/리포트가 생성되지 않는다. 향후 벤치마크 대비 상대 수익률 분석을 추가할 때는 별도 로직이 필요하다.
+
+---
+
+## ADR-009: Railway에서 macOS launchd 서비스로 배포 전환
+
+**결정**: Railway 클라우드 배포를 중단하고 macOS launchd 서비스(`com.etfanalyzer.bot`)로 로컬 실행한다. DB는 `data/etf_analyzer.db`에 로컬 저장한다.
+
+**배경**: Railway 무료 플랜 제한(크레딧 소진, persistent volume 불안정)으로 운영 안정성이 떨어졌다. 로컬 실행 시 DB 접근이 빠르고, investmentConsensus 웹앱이 `ETF_DB_PATH`로 동일 DB를 직접 읽을 수 있어 크로스 프로젝트 연동이 간단해진다. 외부 접근이 필요한 경우 Cloudflare Quick Tunnel을 사용한다.
+
+**Trade-off**: 맥이 꺼져 있거나 네트워크가 끊기면 서비스가 중단된다. 클라우드 대비 가용성이 낮지만, 1인 사용 기준으로 충분하다.

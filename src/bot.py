@@ -28,8 +28,8 @@ _CONFIRM_KEYWORDS = {"y", "yes", "네", "ㅇ", "응", "ㅇㅇ"}
 
 _T = {
     "greeting": {
-        "ko": "👋 안녕하세요! ETF Analyzer 봇이 시작되었습니다.\n\n📌 `/report` — ETF 일일 리포트 조회\n📌 `/insight` — 누적 운용 인사이트 조회",
-        "en": "👋 Hello! ETF Analyzer bot is online.\n\n📌 `/report` — view daily ETF report\n📌 `/insight` — view cumulative insight",
+        "ko": "👋 안녕하세요! ETF Analyzer 봇이 시작되었습니다.\n\n📌 `/report` — ETF 일일 리포트 조회\n📌 `/insight` — 누적 운용 인사이트 조회\n📌 `/returns` — ETF 수익률 비교",
+        "en": "👋 Hello! ETF Analyzer bot is online.\n\n📌 `/report` — view daily ETF report\n📌 `/insight` — view cumulative insight\n📌 `/returns` — compare ETF returns",
     },
     "ask_language": {
         "ko": "👋 Hello! ETF Analyzer bot is online.\n\nWhat language would you like to use?\n(e.g. Korean, 한국어, English, 영어...)",
@@ -139,6 +139,14 @@ _T = {
         "ko": "(데이터 없음)",
         "en": "(no data)",
     },
+    "returns_choose_period": {
+        "ko": "📈 **수익률 비교 — 기간을 선택하세요:**\n\n1. 일간 (1일)\n2. 주간 (5일)\n3. 월간 (1개월)\n4. 연간 (1년)\n\n번호를 입력하세요.",
+        "en": "📈 **Returns comparison — choose a period:**\n\n1. Daily (1d)\n2. Weekly (5d)\n3. Monthly (1mo)\n4. Yearly (1yr)\n\nEnter a number.",
+    },
+    "returns_header": {
+        "ko": "📈 **ETF 수익률 비교 ({period})**\n_{date} 기준_\n",
+        "en": "📈 **ETF Returns Comparison ({period})**\n_as of {date}_\n",
+    },
 }
 
 
@@ -200,6 +208,16 @@ async def on_message(message: discord.Message):
                 await message.channel.send(t("cancelled"))
             return
 
+        if state["state"] == "awaiting_returns_period":
+            del _user_states[user_id]
+            period_map = {"1": "daily", "2": "weekly", "3": "monthly", "4": "yearly"}
+            choice = content.strip()
+            if choice in period_map:
+                await _send_returns_comparison(message.channel, period_map[choice])
+            else:
+                await message.channel.send(t("out_of_range", n=4))
+            return
+
         # Selection states
         etfs = state["etfs"]
         try:
@@ -223,6 +241,8 @@ async def on_message(message: discord.Message):
         await _handle_insight(message)
     elif lower in ("/report", "!report"):
         await _handle_report(message)
+    elif lower in ("/returns", "!returns", "/수익률"):
+        await _handle_returns(message)
 
 
 # ── Startup flow ──────────────────────────────────────────────────────────────
@@ -420,6 +440,86 @@ async def _generate_and_send_report(message: discord.Message, etf: dict):
     except Exception:
         logger.exception(f"On-demand report generation failed for {etf['name']}")
         await message.channel.send(t("report_error", lang))
+
+
+# ── /returns ─────────────────────────────────────────────────────────────────
+
+async def _handle_returns(message: discord.Message):
+    lang = db.get_preference("language") or "en"
+    await message.channel.send(t("returns_choose_period", lang))
+    _user_states[message.author.id] = {"state": "awaiting_returns_period"}
+
+
+async def _send_returns_comparison(channel, period: str):
+    lang = db.get_preference("language") or "en"
+    today = datetime.now(KST).date()
+
+    period_labels = {
+        "daily":   {"ko": "일간 (1일)", "en": "Daily (1d)", "days": 1},
+        "weekly":  {"ko": "주간 (5일)", "en": "Weekly (5d)", "days": 5},
+        "monthly": {"ko": "월간 (1개월)", "en": "Monthly (1mo)", "days": 21},
+        "yearly":  {"ko": "연간 (1년)", "en": "Yearly (1yr)", "days": 252},
+    }
+    p = period_labels[period]
+    label = p[lang]
+    days_needed = p["days"]
+
+    etfs = [dict(e) for e in db.get_all_etfs()]
+    rows = []
+
+    for etf in etfs:
+        returns = [dict(r) for r in db.get_returns(etf["id"], days=days_needed + 5)]
+        if not returns:
+            rows.append({"name": etf["name"], "ticker": etf["ticker"], "ret": None, "close": None})
+            continue
+
+        returns.sort(key=lambda r: r["date"])
+        latest = returns[-1]
+
+        if period == "daily":
+            ret = latest["daily_return_pct"]
+        elif len(returns) >= days_needed + 1:
+            start_price = returns[-(days_needed + 1)]["close_price"]
+            end_price = latest["close_price"]
+            ret = round(((end_price / start_price) - 1) * 100, 2) if start_price else None
+        else:
+            start_price = returns[0]["close_price"]
+            end_price = latest["close_price"]
+            ret = round(((end_price / start_price) - 1) * 100, 2) if start_price else None
+
+        rows.append({
+            "name": etf["name"],
+            "ticker": etf["ticker"],
+            "ret": ret,
+            "close": latest["close_price"],
+        })
+
+    rows.sort(key=lambda r: r["ret"] if r["ret"] is not None else -999, reverse=True)
+
+    header = t("returns_header", lang, period=label, date=str(today))
+    lines = [header]
+
+    for i, r in enumerate(rows, 1):
+        if r["ret"] is None:
+            lines.append(f"{i}. **{r['name']}** ({r['ticker']}) — 데이터 없음")
+            continue
+        arrow = "🔺" if r["ret"] > 0 else "🔻" if r["ret"] < 0 else "➖"
+        close_str = f"{r['close']:,.2f}" if r["close"] else ""
+        lines.append(f"{i}. {arrow} **{r['name']}** ({r['ticker']}): **{r['ret']:+.2f}%** ({close_str})")
+
+    if len(rows) >= 2:
+        valid = [r for r in rows if r["ret"] is not None]
+        if valid:
+            best = valid[0]
+            worst = valid[-1]
+            spread = round(best["ret"] - worst["ret"], 2) if best["ret"] is not None and worst["ret"] is not None else None
+            lines.append("")
+            if lang == "ko":
+                lines.append(f"📊 최고: {best['ticker']} | 최저: {worst['ticker']} | 격차: {spread:.2f}%p" if spread else "")
+            else:
+                lines.append(f"📊 Best: {best['ticker']} | Worst: {worst['ticker']} | Spread: {spread:.2f}%p" if spread else "")
+
+    await _send_chunked(channel, "\n".join(lines))
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

@@ -1,10 +1,13 @@
 import csv
 import io
+import logging
 import re
 import requests
 from bs4 import BeautifulSoup
 from datetime import date
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 HEADERS = {
     "User-Agent": (
@@ -17,6 +20,8 @@ HEADERS = {
 
 def fetch_holdings(url: str, target_date: date) -> Optional[dict]:
     """Fetch ETF holdings for a specific date. Returns None if no data available."""
+    if url.startswith("yfinance://"):
+        return _fetch_yfinance_holdings(url.removeprefix("yfinance://"))
     if "ishares.com" in url:
         return _fetch_ishares(url, target_date)
     return _fetch_timeetf(url, target_date)
@@ -149,3 +154,61 @@ def _parse_ishares_csv(text: str) -> Optional[dict]:
         return None
 
     return {"aum_100m": None, "holdings": holdings}
+
+
+# ─── yfinance (CHAT, WTAI, etc.) ────────────────────────────────────────────
+
+def _fetch_yfinance_holdings(ticker: str) -> Optional[dict]:
+    import yfinance as yf
+
+    try:
+        t = yf.Ticker(ticker)
+        top = t.funds_data.top_holdings
+    except Exception:
+        logger.exception("yfinance holdings fetch failed for %s", ticker)
+        return None
+
+    if top is None or top.empty:
+        return None
+
+    holdings = []
+    for symbol, row in top.iterrows():
+        name = row.get("Name", symbol)
+        weight = row.get("Holding Percent", 0.0) * 100
+        holdings.append({
+            "ticker_code": symbol,
+            "stock_name": name,
+            "quantity": 1,
+            "valuation_krw": 0,
+            "weight_pct": round(weight, 2),
+        })
+
+    return {"aum_100m": None, "holdings": holdings}
+
+
+def fetch_etf_returns(yf_ticker: str, period: str = "5d") -> list[dict]:
+    """Fetch daily close prices and returns via yfinance."""
+    import yfinance as yf
+
+    try:
+        t = yf.Ticker(yf_ticker)
+        hist = t.history(period=period)
+    except Exception:
+        logger.exception("yfinance returns fetch failed for %s", yf_ticker)
+        return []
+
+    if hist.empty:
+        return []
+
+    results = []
+    closes = hist["Close"]
+    for i, (dt, close) in enumerate(closes.items()):
+        d = dt.date() if hasattr(dt, "date") else dt
+        daily_ret = ((close / closes.iloc[i - 1]) - 1) * 100 if i > 0 else None
+        results.append({
+            "date": str(d),
+            "close_price": round(float(close), 4),
+            "daily_return_pct": round(float(daily_ret), 4) if daily_ret is not None else None,
+        })
+
+    return results

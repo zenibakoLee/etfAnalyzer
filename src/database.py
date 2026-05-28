@@ -66,20 +66,38 @@ CREATE TABLE IF NOT EXISTS user_preferences (
     value TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS etf_returns (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    etf_id INTEGER NOT NULL REFERENCES etfs(id),
+    date DATE NOT NULL,
+    close_price REAL NOT NULL,
+    daily_return_pct REAL,
+    UNIQUE(etf_id, date)
+);
+
 CREATE INDEX IF NOT EXISTS idx_snapshots_etf_date ON snapshots(etf_id, date);
 CREATE INDEX IF NOT EXISTS idx_holdings_snapshot ON holdings(snapshot_id);
 CREATE INDEX IF NOT EXISTS idx_no_data_etf_date ON no_data_dates(etf_id, date);
 CREATE INDEX IF NOT EXISTS idx_daily_reports_etf_date ON daily_reports(etf_id, date);
+CREATE INDEX IF NOT EXISTS idx_etf_returns_etf_date ON etf_returns(etf_id, date DESC);
 """
 
-# (id, name, ticker, url, backfill_from)
+# (id, name, ticker, url, backfill_from, yf_ticker, benchmark)
 DEFAULT_ETFS = [
-    (1, "TIME 글로벌AI인공지능액티브", "456600", "https://timeetf.co.kr/m11_view.php?idx=6", "2023-05-16"),
-    (2, "TIME 미국나스닥100액티브", "426030", "https://timeetf.co.kr/m11_view.php?idx=2", "2022-05-11"),
-    (3, "TIME 코스피액티브", "385720", "https://timeetf.co.kr/m11_view.php?idx=11", "2021-05-25"),
+    (1, "TIME 글로벌AI인공지능액티브", "456600", "https://timeetf.co.kr/m11_view.php?idx=6", "2023-05-16", "456600.KS", 0),
+    (2, "TIME 미국나스닥100액티브", "426030", "https://timeetf.co.kr/m11_view.php?idx=2", "2022-05-11", "426030.KS", 0),
+    (3, "TIME 코스피액티브", "385720", "https://timeetf.co.kr/m11_view.php?idx=11", "2021-05-25", "385720.KS", 0),
     (4, "iShares A.I. Innovation and Tech Active ETF", "BAI",
      "https://www.ishares.com/us/products/339081/ishares-a-i-innovation-and-tech-active-etf/1467271812596.ajax?tab=holdings&fileType=csv",
-     "2024-10-21"),
+     "2024-10-21", "BAI", 0),
+    (5, "Roundhill Generative AI & Technology ETF", "CHAT",
+     "yfinance://CHAT", "2026-05-28", "CHAT", 0),
+    (6, "WisdomTree AI & Innovation Fund", "WTAI",
+     "yfinance://WTAI", "2026-05-28", "WTAI", 0),
+    (7, "Vanguard S&P 500 ETF", "VOO",
+     "yfinance://VOO", "2026-05-28", "VOO", 1),
+    (8, "Invesco QQQ Trust", "QQQ",
+     "yfinance://QQQ", "2026-05-28", "QQQ", 1),
 ]
 
 
@@ -102,16 +120,25 @@ def init_db():
     os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
     with get_conn() as conn:
         conn.executescript(SCHEMA)
-        # Migration: add backfill_from column if not exists
-        try:
-            conn.execute("ALTER TABLE etfs ADD COLUMN backfill_from DATE DEFAULT '2023-05-16'")
-        except Exception:
-            pass  # Column already exists
-        for etf_id, name, ticker, url, backfill_from in DEFAULT_ETFS:
+        # Migrations
+        for col, default in [
+            ("backfill_from", "'2023-05-16'"),
+            ("yf_ticker", "NULL"),
+            ("benchmark", "0"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE etfs ADD COLUMN {col} DATE DEFAULT {default}")
+            except Exception:
+                pass
+        for etf_id, name, ticker, url, backfill_from, yf_ticker, benchmark in DEFAULT_ETFS:
             conn.execute(
-                """INSERT OR IGNORE INTO etfs (id, name, ticker, url, backfill_from)
-                   VALUES (?, ?, ?, ?, ?)""",
-                (etf_id, name, ticker, url, backfill_from),
+                """INSERT INTO etfs (id, name, ticker, url, backfill_from, yf_ticker, benchmark)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(id) DO UPDATE SET
+                       name = excluded.name, ticker = excluded.ticker,
+                       url = excluded.url, backfill_from = excluded.backfill_from,
+                       yf_ticker = excluded.yf_ticker, benchmark = excluded.benchmark""",
+                (etf_id, name, ticker, url, backfill_from, yf_ticker, benchmark),
             )
 
 
@@ -264,3 +291,45 @@ def get_known_dates(etf_id: int) -> set:
             "SELECT date FROM no_data_dates WHERE etf_id = ?", (etf_id,)
         ).fetchall()}
     return snap_dates | no_data
+
+
+# ── Returns ──────────────────────────────────────────────────────────────────
+
+def save_returns(etf_id: int, returns_list: list[dict]):
+    with get_conn() as conn:
+        for r in returns_list:
+            conn.execute(
+                """INSERT INTO etf_returns (etf_id, date, close_price, daily_return_pct)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(etf_id, date) DO UPDATE SET
+                       close_price = excluded.close_price,
+                       daily_return_pct = excluded.daily_return_pct""",
+                (etf_id, r["date"], r["close_price"], r["daily_return_pct"]),
+            )
+
+
+def get_returns(etf_id: int, days: int = 30) -> list:
+    with get_conn() as conn:
+        return conn.execute(
+            """SELECT * FROM etf_returns
+               WHERE etf_id = ? ORDER BY date DESC LIMIT ?""",
+            (etf_id, days),
+        ).fetchall()
+
+
+def get_latest_return(etf_id: int):
+    with get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM etf_returns WHERE etf_id = ? ORDER BY date DESC LIMIT 1",
+            (etf_id,),
+        ).fetchone()
+
+
+def get_returns_range(etf_id: int, start_date: str, end_date: str) -> list:
+    with get_conn() as conn:
+        return conn.execute(
+            """SELECT * FROM etf_returns
+               WHERE etf_id = ? AND date BETWEEN ? AND ?
+               ORDER BY date""",
+            (etf_id, start_date, end_date),
+        ).fetchall()

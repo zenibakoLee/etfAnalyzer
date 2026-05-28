@@ -33,12 +33,26 @@ ETF 운용사 사이트의 일별 보유종목(PDF) 데이터는 공개되어 �
 ### F4: 온디맨드 인사이트 조회
 - Discord DM에서 `/insight` → 번호 선택 → 누적 인사이트 반환
 
+### F5: 수익률 추적 (Returns Tracking)
+- 모든 ETF의 일별 종가 및 수익률을 yfinance로 수집·저장
+- 일일 보고서에 수익률 현황 테이블 자동 포함 (일간/주간/월간)
+- Discord `/returns` 명령으로 기간별(일간/주간/월간/연간) 수익률 비교 조회
+
+### F6: 벤치마크 비교
+- VOO (S&P 500), QQQ (Nasdaq 100)를 벤치마크 ETF로 등록
+- 벤치마크는 수익률 추적만 수행하고, 보유종목 분석/리포트 생성 대상에서 제외
+- 수익률 비교 시 벤치마크 대비 상대 성과 확인 가능
+
 ## Non-Goals
 - 멀티 유저 지원 없음
 - 매수/매도 자동 실행 없음
 - 실시간 스트리밍 없음
 
 ## Constraints
-- 데이터 소스: timeetf.co.kr (HTML 스크래핑, rate-limit 고려해 0.5s delay)
-- 배포: Railway (persistent volume at `/data`, health check at `/health`)
+- 데이터 소스:
+  - timeetf.co.kr — 한국 ETF 보유종목 (HTML 스크래핑, rate-limit 고려해 0.5s delay)
+  - iShares CSV — 미국 iShares ETF 보유종목 (CSV 다운로드)
+  - yfinance — 미국 ETF 보유종목 (top 10 holdings) 및 전 ETF 일별 종가/수익률
+- 배포: macOS launchd 서비스 (`com.etfanalyzer.bot`), DB는 로컬 `data/etf_analyzer.db`
 - Discord 메시지 최대 2000자 → 청킹 필요
+- investmentConsensus 웹앱이 `ETF_DB_PATH`를 통해 이 DB를 직접 읽음

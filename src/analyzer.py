@@ -295,7 +295,7 @@ def generate_etf_report(changes: dict, prev_insight: str = "") -> str:
 
     response = _get_client().messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=1500,
+        max_tokens=3000,
         system=[
             {
                 "type": "text",
@@ -324,7 +324,7 @@ def generate_market_headline(all_changes: list) -> str:
     )
     response = _get_client().messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=1500,
+        max_tokens=3000,
         system=_HEADLINE_SYSTEM,
         messages=[
             {

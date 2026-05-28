@@ -34,6 +34,8 @@ async def run_daily_job(send_fn: Callable[[str], Awaitable]):
 
     for etf in etfs:
         etf = dict(etf)
+        if etf.get("benchmark"):
+            continue
         try:
             # ── Backfill missing dates before today ───────────────────────
             await _backfill_gaps(etf, today)
@@ -76,8 +78,14 @@ async def run_daily_job(send_fn: Callable[[str], Awaitable]):
         except Exception:
             logger.exception(f"Error processing ETF {etf['name']}")
 
+    # ── Collect daily returns for all ETFs ──────────────────────────────────
+    returns_summary = await _collect_daily_returns(etfs, today_str)
+
     if not report_sections:
-        logger.info("No report sections today — nothing to send")
+        if returns_summary:
+            await send_fn(_build_returns_only_message(today_str, returns_summary))
+        else:
+            logger.info("No report sections today — nothing to send")
         return
 
     # ── Market headline ───────────────────────────────────────────────────────
@@ -86,7 +94,7 @@ async def run_daily_job(send_fn: Callable[[str], Awaitable]):
         headline = analyzer.generate_market_headline(all_changes)
         db.save_market_insight(today_str, headline)
 
-    message = _build_message(today_str, headline, report_sections)
+    message = _build_message(today_str, headline, report_sections, returns_summary)
     await send_fn(message)
     logger.info("Daily report sent")
 
@@ -112,13 +120,18 @@ def _build_all_changes(etf: dict) -> list:
     return changes_list
 
 
-def _build_message(date_str: str, headline: str, sections: list) -> str:
+def _build_message(date_str: str, headline: str, sections: list, returns_summary: list | None = None) -> str:
     parts = [f"📅 **{date_str} ETF 일일 보고서**\n"]
 
     if headline:
         parts.append("🌐 **오늘의 시장 헤드라인**")
         parts.append(headline)
         parts.append("\n━━━━━━━━━━━━━━━━━━━━━")
+
+    if returns_summary:
+        parts.append("\n📈 **ETF 수익률 현황**")
+        parts.append(_format_returns_table(returns_summary))
+        parts.append("━━━━━━━━━━━━━━━━━━━━━")
 
     for section in sections:
         name, ticker, report = section[0], section[1], section[2]
@@ -131,6 +144,61 @@ def _build_message(date_str: str, headline: str, sections: list) -> str:
         parts.append("━━━━━━━━━━━━━━━━━━━━━")
 
     return "\n".join(parts)
+
+
+def _build_returns_only_message(date_str: str, returns_summary: list) -> str:
+    parts = [f"📅 **{date_str} ETF 수익률 현황**\n"]
+    parts.append(_format_returns_table(returns_summary))
+    return "\n".join(parts)
+
+
+def _format_returns_table(returns_summary: list) -> str:
+    lines = []
+    for r in returns_summary:
+        arrow = "🔺" if r["daily_pct"] and r["daily_pct"] > 0 else "🔻" if r["daily_pct"] and r["daily_pct"] < 0 else "➖"
+        daily = f"{r['daily_pct']:+.2f}%" if r["daily_pct"] is not None else "N/A"
+        w1 = f"{r['week_pct']:+.2f}%" if r.get("week_pct") is not None else "—"
+        m1 = f"{r['month_pct']:+.2f}%" if r.get("month_pct") is not None else "—"
+        lines.append(f"{arrow} **{r['name']}** ({r['ticker']}): {r['close']:.2f} | 일간 {daily} | 주간 {w1} | 월간 {m1}")
+    return "\n".join(lines)
+
+
+async def _collect_daily_returns(etfs: list, today_str: str) -> list[dict]:
+    """Fetch and store daily returns for all ETFs with yf_ticker."""
+    summary = []
+    for etf in etfs:
+        etf = dict(etf)
+        yf_ticker = etf.get("yf_ticker")
+        if not yf_ticker:
+            continue
+        try:
+            returns = scraper.fetch_etf_returns(yf_ticker, period="1mo")
+            if returns:
+                db.save_returns(etf["id"], returns)
+                latest = returns[-1]
+                week_pct = _calc_period_return(returns, 5)
+                month_pct = _calc_period_return(returns, 20)
+                summary.append({
+                    "name": etf["name"],
+                    "ticker": etf["ticker"],
+                    "close": latest["close_price"],
+                    "daily_pct": latest["daily_return_pct"],
+                    "week_pct": week_pct,
+                    "month_pct": month_pct,
+                })
+        except Exception:
+            logger.exception("Returns collection failed for %s", etf["name"])
+    return summary
+
+
+def _calc_period_return(returns: list[dict], days: int) -> float | None:
+    if len(returns) < days + 1:
+        return None
+    start = returns[-(days + 1)]["close_price"]
+    end = returns[-1]["close_price"]
+    if start == 0:
+        return None
+    return round(((end / start) - 1) * 100, 4)
 
 
 async def _report_from_latest_snapshots(etf: dict, today_str: str, report_sections: list):
@@ -165,6 +233,8 @@ async def _report_from_latest_snapshots(etf: dict, today_str: str, report_sectio
 
 async def _backfill_gaps(etf: dict, today: date):
     """Scrape any missing weekday dates from the ETF's backfill_from date up to yesterday."""
+    if etf.get("url", "").startswith("yfinance://"):
+        return
     known = db.get_known_dates(etf["id"])
     yesterday = today - timedelta(days=1)
 
@@ -205,6 +275,8 @@ def _daterange(start: date, end: date):
 
 def count_missing_dates(etf: dict) -> int:
     """Return number of weekday dates missing from backfill_from to yesterday."""
+    if etf.get("url", "").startswith("yfinance://"):
+        return 0
     today = datetime.now(KST).date()
     yesterday = today - timedelta(days=1)
     etf_start = date.fromisoformat(etf["backfill_from"]) if etf.get("backfill_from") else BACKFILL_START

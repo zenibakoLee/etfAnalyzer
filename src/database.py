@@ -93,7 +93,7 @@ DEFAULT_ETFS = [
     (5, "Roundhill Generative AI & Technology ETF", "CHAT",
      "roundhill://CHAT", "2023-05-18", "CHAT", 0),
     (6, "WisdomTree AI & Innovation Fund", "WTAI",
-     "yfinance://WTAI", "2026-05-28", "WTAI", 0),
+     "wisdomtree://WTAI", "2026-05-28", "WTAI", 0),
     (7, "Vanguard S&P 500 ETF", "VOO",
      "yfinance://VOO", "2026-05-28", "VOO", 1),
     (8, "Invesco QQQ Trust", "QQQ",

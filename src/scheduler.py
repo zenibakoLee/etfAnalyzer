@@ -232,7 +232,7 @@ async def _report_from_latest_snapshots(etf: dict, today_str: str, report_sectio
 
 
 def _skip_backfill(url: str) -> bool:
-    return url.startswith("yfinance://") or url.startswith("roundhill://")
+    return url.startswith(("yfinance://", "roundhill://", "wisdomtree://"))
 
 
 async def _backfill_gaps(etf: dict, today: date):

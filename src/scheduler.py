@@ -231,9 +231,13 @@ async def _report_from_latest_snapshots(etf: dict, today_str: str, report_sectio
     logger.info(f"Fallback report generated for {etf['name']} (based on {ref_date})")
 
 
+def _skip_backfill(url: str) -> bool:
+    return url.startswith("yfinance://") or url.startswith("roundhill://")
+
+
 async def _backfill_gaps(etf: dict, today: date):
     """Scrape any missing weekday dates from the ETF's backfill_from date up to yesterday."""
-    if etf.get("url", "").startswith("yfinance://"):
+    if _skip_backfill(etf.get("url", "")):
         return
     known = db.get_known_dates(etf["id"])
     yesterday = today - timedelta(days=1)
@@ -275,7 +279,7 @@ def _daterange(start: date, end: date):
 
 def count_missing_dates(etf: dict) -> int:
     """Return number of weekday dates missing from backfill_from to yesterday."""
-    if etf.get("url", "").startswith("yfinance://"):
+    if _skip_backfill(etf.get("url", "")):
         return 0
     today = datetime.now(KST).date()
     yesterday = today - timedelta(days=1)

@@ -91,7 +91,7 @@ DEFAULT_ETFS = [
      "https://www.ishares.com/us/products/339081/ishares-a-i-innovation-and-tech-active-etf/1467271812596.ajax?tab=holdings&fileType=csv",
      "2024-10-21", "BAI", 0),
     (5, "Roundhill Generative AI & Technology ETF", "CHAT",
-     "yfinance://CHAT", "2026-05-28", "CHAT", 0),
+     "roundhill://CHAT", "2023-05-18", "CHAT", 0),
     (6, "WisdomTree AI & Innovation Fund", "WTAI",
      "yfinance://WTAI", "2026-05-28", "WTAI", 0),
     (7, "Vanguard S&P 500 ETF", "VOO",

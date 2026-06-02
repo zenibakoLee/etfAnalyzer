@@ -20,6 +20,8 @@ HEADERS = {
 
 def fetch_holdings(url: str, target_date: date) -> Optional[dict]:
     """Fetch ETF holdings for a specific date. Returns None if no data available."""
+    if url.startswith("roundhill://"):
+        return _fetch_roundhill(url.removeprefix("roundhill://"), target_date)
     if url.startswith("yfinance://"):
         return _fetch_yfinance_holdings(url.removeprefix("yfinance://"))
     if "ishares.com" in url:
@@ -156,7 +158,61 @@ def _parse_ishares_csv(text: str) -> Optional[dict]:
     return {"aum_100m": None, "holdings": holdings}
 
 
-# ─── yfinance (CHAT, WTAI, etc.) ────────────────────────────────────────────
+# ─── Roundhill Investments ───────────────────────────────────────────────────
+
+_ROUNDHILL_BASE = "https://www.roundhillinvestments.com/assets/data/FilepointRoundhill.40RU.RU_Holdings_{}.csv"
+_ROUNDHILL_MAX_LOOKBACK = 15
+
+
+def _fetch_roundhill(fund_code: str, target_date: date) -> Optional[dict]:
+    for offset in range(_ROUNDHILL_MAX_LOOKBACK):
+        d = target_date - __import__("datetime").timedelta(days=offset)
+        date_str = d.strftime("%m%d%Y")
+        url = _ROUNDHILL_BASE.format(date_str)
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=15, allow_redirects=False)
+            if resp.status_code != 200:
+                continue
+        except requests.RequestException:
+            continue
+
+        holdings = _parse_roundhill_csv(resp.text, fund_code)
+        if holdings:
+            return {"aum_100m": None, "holdings": holdings}
+
+    return None
+
+
+def _parse_roundhill_csv(text: str, fund_code: str) -> list:
+    reader = csv.DictReader(io.StringIO(text))
+    holdings = []
+    for row in reader:
+        if row.get("Account") != fund_code:
+            continue
+        if row.get("MoneyMarketFlag") == "Y":
+            continue
+        ticker = (row.get("StockTicker") or "").strip()
+        name = (row.get("SecurityName") or "").strip()
+        if not name or ticker in ("Cash&Other",) or ticker.startswith("CASH"):
+            continue
+        try:
+            weight_str = (row.get("Weightings") or "0").strip().rstrip("%")
+            weight_pct = float(weight_str)
+            shares = int(float((row.get("Shares") or "0").strip()))
+            mkt_val = int(float((row.get("MarketValue") or "0").strip()))
+            holdings.append({
+                "ticker_code": ticker,
+                "stock_name": name,
+                "quantity": shares,
+                "valuation_krw": mkt_val,
+                "weight_pct": weight_pct,
+            })
+        except (ValueError, KeyError):
+            continue
+    return holdings
+
+
+# ─── yfinance (WTAI, etc.) ──────────────────────────────────────────────────
 
 def _fetch_yfinance_holdings(ticker: str) -> Optional[dict]:
     import yfinance as yf

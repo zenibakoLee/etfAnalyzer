@@ -8,6 +8,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from src import database as db, scraper, analyzer
 from src.config import SCHEDULE_HOUR, SCHEDULE_MINUTE
+from src.pdf_report import generate_daily_pdf
 
 logger = logging.getLogger(__name__)
 KST = pytz.timezone("Asia/Seoul")
@@ -16,7 +17,7 @@ BACKFILL_START = date(2023, 5, 16)
 _BACKFILL_DELAY = 0.5  # seconds between requests
 
 
-async def run_daily_job(send_fn: Callable[[str], Awaitable]):
+async def run_daily_job(send_fn: Callable[..., Awaitable]):
     today = datetime.now(KST).date()
     today_str = str(today)
 
@@ -94,8 +95,15 @@ async def run_daily_job(send_fn: Callable[[str], Awaitable]):
         headline = analyzer.generate_market_headline(all_changes)
         db.save_market_insight(today_str, headline)
 
-    message = _build_message(today_str, headline, report_sections, returns_summary)
-    await send_fn(message)
+    # ── Generate PDF + compact Discord summary ────────────────────────────────
+    try:
+        pdf_path = generate_daily_pdf(today_str, headline, returns_summary, report_sections)
+    except Exception:
+        logger.exception("PDF generation failed, falling back to text-only")
+        pdf_path = None
+
+    compact = _build_compact_message(today_str, headline, returns_summary, report_sections)
+    await send_fn(compact, pdf_path)
     logger.info("Daily report sent")
 
 
@@ -143,6 +151,40 @@ def _build_message(date_str: str, headline: str, sections: list, returns_summary
         parts.append(report)
         parts.append("━━━━━━━━━━━━━━━━━━━━━")
 
+    return "\n".join(parts)
+
+
+def _build_compact_message(
+    date_str: str, headline: str, returns_summary: list | None, sections: list
+) -> str:
+    """Discord-friendly compact summary (single message, < 1900 chars)."""
+    parts = [f"📅 **{date_str} ETF 일일 보고서**"]
+
+    if headline:
+        short_headline = headline.split("\n")[0][:200]
+        parts.append(f"🌐 {short_headline}")
+
+    if returns_summary:
+        parts.append("")
+        for r in returns_summary:
+            arrow = "🔺" if r["daily_pct"] and r["daily_pct"] > 0 else "🔻" if r["daily_pct"] and r["daily_pct"] < 0 else "➖"
+            daily = f"{r['daily_pct']:+.2f}%" if r["daily_pct"] is not None else "N/A"
+            parts.append(f"{arrow} **{r['name'][:10]}** {r['close']:.0f} | {daily}")
+
+    if sections:
+        parts.append("\n📊 **ETF별 핵심 변화**")
+        for section in sections:
+            name, ticker, report = section[0], section[1], section[2]
+            first_line = ""
+            for line in report.split("\n"):
+                stripped = line.strip()
+                if stripped and not stripped.startswith("**") and len(stripped) > 5:
+                    first_line = stripped[:100]
+                    break
+            if first_line:
+                parts.append(f"• **{name[:10]}**: {first_line}")
+
+    parts.append("\n📎 상세 분석은 첨부 PDF를 확인하세요.")
     return "\n".join(parts)
 
 
@@ -291,7 +333,7 @@ def count_missing_dates(etf: dict) -> int:
     )
 
 
-async def run_startup_job(send_fn: Callable[[str], Awaitable]):
+async def run_startup_job(send_fn: Callable[..., Awaitable]):
     """Backfill gaps + generate today's report (if missing) + refresh insights if >7 days old."""
     today = datetime.now(KST).date()
     today_str = str(today)
@@ -362,7 +404,7 @@ async def run_weekly_insight_job():
             logger.exception(f"Error generating weekly insight for {etf['name']}")
 
 
-def setup_scheduler(send_fn: Callable[[str], Awaitable]) -> AsyncIOScheduler:
+def setup_scheduler(send_fn: Callable[..., Awaitable]) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=KST)
     scheduler.add_job(
         run_daily_job,

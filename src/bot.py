@@ -566,14 +566,30 @@ def _find_split(text: str, limit: int) -> int:
     return limit
 
 
-async def send_report(text: str):
-    """Send report via webhook."""
+async def send_report(text: str, pdf_path: str | None = None):
+    """Send report via webhook. If pdf_path is provided, attach it."""
     if DISCORD_WEBHOOK_URL:
         try:
-            await _send_webhook(text)
+            if pdf_path:
+                await _send_webhook_with_file(text, pdf_path)
+            else:
+                await _send_webhook(text)
             logger.info("Daily report sent via webhook")
         except Exception:
             logger.exception("Failed to send webhook report")
+
+
+async def _send_webhook_with_file(text: str, file_path: str):
+    import os
+    filename = os.path.basename(file_path)
+    async with httpx.AsyncClient() as client:
+        with open(file_path, "rb") as f:
+            resp = await client.post(
+                DISCORD_WEBHOOK_URL,
+                data={"content": text[:1900]},
+                files={"file": (filename, f, "application/pdf")},
+            )
+            resp.raise_for_status()
 
 
 async def _send_webhook(text: str):

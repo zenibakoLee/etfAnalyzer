@@ -10,3 +10,5 @@ python-dateutil==2.9.0
 python-dotenv==1.0.1
 watchfiles>=1.0.0
 playwright
+matplotlib>=3.8.0
+yfinance>=0.2.36

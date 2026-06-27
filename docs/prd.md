@@ -36,12 +36,34 @@ ETF 운용사 사이트의 일별 보유종목(PDF) 데이터는 공개되어 �
 ### F5: 수익률 추적 (Returns Tracking)
 - 모든 ETF의 일별 종가 및 수익률을 yfinance로 수집·저장
 - 일일 보고서에 수익률 현황 테이블 자동 포함 (일간/주간/월간)
-- Discord `/returns` 명령으로 기간별(일간/주간/월간/연간) 수익률 비교 조회
+- Discord `/returns` 명령으로 기간별(일간/주간/월간/3개월/6개월/YTD/연간) 수익률 비교 조회
+- 첫 수익률 수집 시 2년치 이력을 확보하여 장기 비교 가능
 
 ### F6: 벤치마크 비교
-- VOO (S&P 500), QQQ (Nasdaq 100)를 벤치마크 ETF로 등록
+- VOO (S&P 500), QQQ (Nasdaq 100), SOXX (반도체)를 벤치마크 ETF로 등록
 - 벤치마크는 수익률 추적만 수행하고, 보유종목 분석/리포트 생성 대상에서 제외
 - 수익률 비교 시 벤치마크 대비 상대 성과 확인 가능
+
+### F7: PDF 보고서
+- ReportLab + matplotlib 기반 다크 테마 PDF 생성
+- 수익률 차트 (일간 수익률 막대 그래프 + 주간/월간 비교 차트)
+- ETF별 상세 분석 섹션 (매수/매도 색상 구분)
+- Pretendard 폰트 사용 (한글 렌더링)
+- Discord Webhook으로 PDF 첨부 전송
+
+### F8: Webhook 전송
+- Discord Webhook URL을 통한 리포트 전송 (봇 프로세스와 독립)
+- 텍스트 메시지 청킹 (1900자 단위) + PDF 파일 첨부
+
+### F9: 데이터 헬스 체크 & 자동 복구
+- 3일 이상 연속 수집 실패 감지
+- yfinance 폴백 자동 복구 시도
+- 수집 실패 및 복구 결과를 일일 리포트에 포함
+- iShares 봇 방어(HTML 반환) 자동 감지 및 yfinance 폴백
+
+### F10: 09:00 복구 체크
+- 08:00 리포트 미생성 시 09:00에 자동 재시도
+- 재시도 실패 시 Discord Webhook으로 경고 전송
 
 ## Non-Goals
 - 멀티 유저 지원 없음
@@ -50,9 +72,12 @@ ETF 운용사 사이트의 일별 보유종목(PDF) 데이터는 공개되어 �
 
 ## Constraints
 - 데이터 소스:
-  - timeetf.co.kr — 한국 ETF 보유종목 (HTML 스크래핑, rate-limit 고려해 0.5s delay)
-  - iShares CSV — 미국 iShares ETF 보유종목 (CSV 다운로드)
+  - timeetf.co.kr — 한국 ETF 보유종목 (HTML 스크래핑, rate-limit 고려해 0.5s delay, pdfDate 실패 시 최신 데이터 폴백)
+  - iShares CSV — 미국 iShares ETF 보유종목 (CSV 다운로드, 봇 방어 시 yfinance 폴백)
+  - Roundhill CSV — Roundhill 운용사 ETF (CSV 다운로드)
+  - WisdomTree CSV — WisdomTree 운용사 ETF (CSV 다운로드)
+  - VistaShares CSV — VistaShares 운용사 ETF (CSV 다운로드)
   - yfinance — 미국 ETF 보유종목 (top 10 holdings) 및 전 ETF 일별 종가/수익률
 - 배포: macOS launchd 서비스 (`com.etfanalyzer.bot`), DB는 로컬 `data/etf_analyzer.db`
-- Discord 메시지 최대 2000자 → 청킹 필요
+- Discord Webhook으로 메시지 전송 (텍스트 1900자 청킹 + PDF 첨부)
 - investmentConsensus 웹앱이 `ETF_DB_PATH`를 통해 이 DB를 직접 읽음

@@ -8,11 +8,16 @@ ETF 일별 보유종목 변화를 자동 분석하여 매일 아침 Discord DM�
 - **일일 자동 리포트** — 매일 08:00 KST, ETF 보유종목 변화 분석 결과를 Discord DM으로 전송
 - **의도적 변화 감지** — 설정/해지(creation/redemption) 영향을 제거하고 운용역의 순수한 매수/매도 식별
 - **주간 인사이트** — 매주 일요일 10:00 KST, 누적 이력 기반 운용 원칙 분석 및 저장
-- **수익률 비교** — `/returns` 명령어로 전 ETF 일간/주간/월간/분기/반기/연간 수익률 비교
+- **수익률 비교** — `/returns` 명령어로 전 ETF 일간/주간/월간/3개월/6개월/YTD/연간 수익률 비교
 - **벤치마크 지원** — VOO(S&P 500), QQQ(Nasdaq 100)를 벤치마크로 수익률 비교에 포함
 - **온디맨드 인사이트 조회** — Discord에서 `/insight` 명령어로 최신 인사이트 즉시 확인
 - **이력 자동 백필** — 새 ETF 추가 시 등록일부터 누락 데이터 자동 수집
-- **yfinance 데이터 소스** — 미국 상장 ETF는 yfinance API를 통해 보유종목 및 수익률 자동 수집
+- **멀티소스 스크래핑** — timeetf, iShares CSV, Roundhill CSV, WisdomTree CSV, VistaShares CSV, yfinance 등 소스별 자동 디스패치
+- **PDF 리포트** — ReportLab + matplotlib 기반 다크 테마 PDF 보고서 (Pretendard 폰트, 차트 시각화 포함)
+- **Webhook 전송** — Discord Webhook을 통한 리포트 전송 (봇 프로세스와 독립적으로 동작)
+- **자동 시작 작업** — 봇 기동 시 2시간 쿨다운 기반 자동 데이터 수집 및 리포트 생성
+- **데이터 헬스 체크** — 3일 이상 연속 수집 실패 시 yfinance 폴백 자동 복구 + Discord 알림
+- **09:00 복구 체크** — 08:00 리포트 미생성 시 09:00에 자동 재시도
 
 ## 지원 ETF
 
@@ -21,11 +26,13 @@ ETF 일별 보유종목 변화를 자동 분석하여 매일 아침 Discord DM�
 | TIME 글로벌AI인공지능액티브 | 456600 | timeetf.co.kr | 분석 대상 |
 | TIME 미국나스닥100액티브 | 426030 | timeetf.co.kr | 분석 대상 |
 | TIME 코스피액티브 | 385720 | timeetf.co.kr | 분석 대상 |
-| iShares A.I. Innovation and Tech Active ETF | BAI | iShares CSV API | 분석 대상 |
-| Global X AI & Technology ETF | CHAT | yfinance | 분석 대상 |
-| WisdomTree Artificial Intelligence & Innovation Fund | WTAI | yfinance | 분석 대상 |
+| iShares A.I. Innovation and Tech Active ETF | BAI | iShares CSV (yfinance 폴백) | 분석 대상 |
+| Roundhill Generative AI & Technology ETF | CHAT | Roundhill CSV | 분석 대상 |
+| WisdomTree AI & Innovation Fund | WTAI | WisdomTree CSV | 분석 대상 |
 | Vanguard S&P 500 ETF | VOO | yfinance | 벤치마크 |
 | Invesco QQQ Trust | QQQ | yfinance | 벤치마크 |
+| iShares Semiconductor ETF | SOXX | yfinance | 벤치마크 |
+| VistaShares AI Supercycle ETF | AIS | VistaShares CSV | 분석 대상 (비활성) |
 
 벤치마크 ETF는 수익률 비교에만 사용되며, 일일 리포트/종합 인사이트에서는 제외됩니다.
 
@@ -85,6 +92,7 @@ cp .env.example .env
 ```env
 DISCORD_BOT_TOKEN=your_bot_token_here        # Discord 봇 토큰
 DISCORD_USER_ID=your_discord_user_id_here    # 리포트를 받을 사용자 ID
+DISCORD_WEBHOOK_URL=your_webhook_url_here    # Discord Webhook URL (리포트 전송용)
 ANTHROPIC_API_KEY=your_anthropic_api_key     # Anthropic API 키
 DB_PATH=./data/etf_analyzer.db              # DB 경로 (기본값 그대로 사용 권장)
 SCHEDULE_HOUR=8                              # 일일 리포트 전송 시각 (KST, 24h)
@@ -97,15 +105,11 @@ SCHEDULE_MINUTE=0
 python -m src.main
 ```
 
-소스 파일이 변경되면 자동으로 재시작됩니다.
-
 정상 실행 시 출력:
 ```
 Database initialized
-Scheduler started: daily=08:00 KST, weekly insight=Sun 10:00 KST
+Scheduler started: daily=08:00 KST, weekly insight=Sun 10:00 KST, recovery=09:00 KST
 Health server listening on port 8080
-Starting Discord bot...
-Discord bot ready: YourBot#1234
 ```
 
 > **포트 충돌 시**: `lsof -ti:8080 | xargs kill -9` 또는 `PORT=8081 python -m src.main`
@@ -124,12 +128,18 @@ Discord bot ready: YourBot#1234
 ```
 매일 08:00 KST
   → 누락 이력 자동 백필 (ETF별 등록일부터)
-  → 오늘 보유종목 스크래핑
+  → 오늘 보유종목 스크래핑 (실패 시 yfinance 폴백)
   → 설정/해지 기준선(베이스라인 비율) 계산
   → 의도적 변화 / 가격 드리프트 분류
   → Claude AI로 ETF별 리포트 생성
   → 시장 종합 헤드라인 생성
-  → Discord DM 전송
+  → 데이터 헬스 체크 (3일+ 연속 실패 ETF → yfinance 자동 복구 시도)
+  → PDF 보고서 생성 (ReportLab + matplotlib 차트)
+  → Discord Webhook으로 전송
+
+매일 09:00 KST (복구 체크)
+  → 08:00 리포트가 생성되지 않았으면 자동 재시도
+  → 재시도 실패 시 Discord Webhook으로 경고 전송
 
 매주 일요일 10:00 KST
   → 전체 누적 이력 분석
@@ -140,13 +150,18 @@ Discord bot ready: YourBot#1234
 
 ```
 src/
-  main.py       진입점 (DB 초기화, 스케줄러, 헬스 서버, 봇 시작)
-  config.py     환경 변수 로딩
-  scraper.py    ETF 보유종목 스크래핑 (timeetf.co.kr, iShares)
-  database.py   SQLite CRUD
-  analyzer.py   변화 감지 로직 + Claude API 호출
-  scheduler.py  일일/주간 스케줄 잡
-  bot.py        Discord 이벤트 핸들러
+  main.py         진입점 (DB 초기화, 스케줄러, 헬스 서버)
+  config.py       환경 변수 로딩
+  scraper.py      ETF 보유종목 스크래핑 (timeetf, iShares, Roundhill, WisdomTree, VistaShares, yfinance)
+  database.py     SQLite CRUD
+  analyzer.py     변화 감지 로직 + Claude API 호출
+  scheduler.py    일일/주간/복구 스케줄 잡
+  bot.py          Discord 이벤트 핸들러
+  webhook.py      Discord Webhook 전송 (봇 독립)
+  pdf_report.py   ReportLab 기반 PDF 보고서 생성
+
+assets/
+  fonts/          Pretendard 폰트 (PDF 한글 렌더링용)
 
 docs/
   prd.md              제품 요구사항
@@ -163,21 +178,25 @@ docs/
 DEFAULT_ETFS = [
     # (id, name, ticker, url, backfill_from, yf_ticker, benchmark)
     ...,
-    (9, "새 ETF 이름", "티커", "https://...", "YYYY-MM-DD", "YF_TICKER", 0),
+    (11, "새 ETF 이름", "티커", "https://...", "YYYY-MM-DD", "YF_TICKER", 0),
 ]
 ```
 
 - **timeetf.co.kr ETF**: URL 형식 `https://timeetf.co.kr/m11_view.php?idx=N`
-- **iShares ETF**: URL 형식 `https://www.ishares.com/.../1467271812596.ajax?tab=holdings&fileType=csv`
+- **iShares ETF**: URL 형식 `https://www.ishares.com/.../1467271812596.ajax?tab=holdings&fileType=csv` (실패 시 yfinance 자동 폴백)
 - **yfinance ETF**: URL 형식 `yfinance://TICKER` (미국 상장 ETF)
+- **Roundhill ETF**: URL 형식 `roundhill://TICKER`
+- **WisdomTree ETF**: URL 형식 `wisdomtree://TICKER`
+- **VistaShares ETF**: URL 형식 `vistashares://TICKER`
 - **벤치마크**: `benchmark=1`로 설정하면 수익률 비교에만 포함
 
 ## 기술 스택
 
 - Python 3.10+, asyncio
-- discord.py, APScheduler, aiohttp
+- discord.py, APScheduler, aiohttp, httpx
 - anthropic SDK (Claude claude-sonnet-4-6, 프롬프트 캐싱 적용)
 - yfinance (미국 ETF 데이터)
+- ReportLab + matplotlib (PDF 보고서)
 - SQLite, BeautifulSoup4
 
 ## 라이선스

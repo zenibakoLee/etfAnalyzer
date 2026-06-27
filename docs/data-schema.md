@@ -25,11 +25,13 @@ DEFAULT_ETFS 튜플 형식: `(id, name, ticker, url, backfill_from, yf_ticker, b
 | 1 | 456600 | TIME 글로벌AI인공지능액티브 | timeetf | 0 |
 | 2 | 426030 | TIME 미국나스닥100액티브 | timeetf | 0 |
 | 3 | 385720 | TIME 코스피액티브 | timeetf | 0 |
-| 4 | BAI | iShares A.I. Innovation and Tech Active ETF | iShares CSV | 0 |
-| 5 | CHAT | Roundhill Generative AI & Technology ETF | yfinance | 0 |
-| 6 | WTAI | WisdomTree AI & Innovation Fund | yfinance | 0 |
+| 4 | BAI | iShares A.I. Innovation and Tech Active ETF | iShares CSV (yfinance 폴백) | 0 |
+| 5 | CHAT | Roundhill Generative AI & Technology ETF | roundhill:// | 0 |
+| 6 | WTAI | WisdomTree AI & Innovation Fund | wisdomtree:// | 0 |
 | 7 | VOO | Vanguard S&P 500 ETF | yfinance | 1 |
 | 8 | QQQ | Invesco QQQ Trust | yfinance | 1 |
+| 9 | SOXX | iShares Semiconductor ETF | yfinance:// | 1 |
+| 10 | AIS | VistaShares AI Supercycle ETF | vistashares:// | 0 (비활성) |
 
 ### `snapshots`
 특정 날짜의 ETF 전체 스냅샷. 1 ETF × 1 일 = 1 row.
@@ -101,6 +103,8 @@ ETF별 일일 리포트 텍스트. Claude가 생성한 분석 결과를 저장. 
 | key | TEXT PK | |
 | value | TEXT | |
 
+주요 키: `language` (ko/en), `last_startup_run` (ISO 형식 타임스탬프, 자동 시작 작업 2시간 쿨다운에 사용)
+
 ### `etf_returns`
 ETF별 일별 종가 및 수익률. yfinance로 수집.
 
@@ -112,7 +116,7 @@ ETF별 일별 종가 및 수익률. yfinance로 수집.
 | close_price | REAL | 일별 종가 |
 | daily_return_pct | REAL | 전일 대비 수익률 (%). 첫 날은 NULL |
 
-Helper 함수: `save_returns`, `get_returns`, `get_latest_return`, `get_returns_range`
+Helper 함수: `save_returns`, `get_returns`, `get_latest_return`, `get_returns_range`, `get_latest_snapshot_date`, `delete_no_data_date`
 
 ## Indexes
 - `idx_snapshots_etf_date` ON `snapshots(etf_id, date)` — 전일 스냅샷 조회에 사용

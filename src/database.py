@@ -98,6 +98,12 @@ DEFAULT_ETFS = [
      "yfinance://VOO", "2026-05-28", "VOO", 1),
     (8, "Invesco QQQ Trust", "QQQ",
      "yfinance://QQQ", "2026-05-28", "QQQ", 1),
+    (9, "iShares Semiconductor ETF", "SOXX",
+     "yfinance://SOXX", "2025-01-02", "SOXX", 1),
+    (10, "VistaShares Artificial Intelligence Supercycle ETF", "AIS",
+     "vistashares://AIS", "2026-06-22", "AIS", 0),
+    (11, "LG QRAFT AI-Powered U.S. Large Cap Core ETF", "LQAI",
+     "qraft://LQAI", "2026-07-04", "LQAI", 0),
 ]
 
 
@@ -333,3 +339,20 @@ def get_returns_range(etf_id: int, start_date: str, end_date: str) -> list:
                ORDER BY date""",
             (etf_id, start_date, end_date),
         ).fetchall()
+
+
+def get_latest_snapshot_date(etf_id: int) -> str | None:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT date FROM snapshots WHERE etf_id = ? ORDER BY date DESC LIMIT 1",
+            (etf_id,),
+        ).fetchone()
+    return row["date"] if row else None
+
+
+def delete_no_data_date(etf_id: int, date_str: str):
+    with get_conn() as conn:
+        conn.execute(
+            "DELETE FROM no_data_dates WHERE etf_id = ? AND date = ?",
+            (etf_id, date_str),
+        )

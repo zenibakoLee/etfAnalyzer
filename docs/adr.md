@@ -139,3 +139,22 @@
 **배경**: 특정 소스(timeetf, iShares 등)가 수일간 장애를 겪어도 감지되지 않아 데이터 갭이 쌓이는 문제가 있었다. yfinance는 보유종목 상위 10개만 제공하지만, 완전 누락보다 부분 데이터가 낫다.
 
 **Trade-off**: yfinance 폴백 데이터는 원본 소스 대비 종목 수가 적어(top 10) 분석 정밀도가 떨어진다. 복구 성공/실패를 일일 리포트에 명시하여 사용자가 인지할 수 있도록 한다.
+
+
+## ADR-015: Qraft CMS API 스크레이퍼 (LQAI)
+
+**결정**: `qraft://` URL 스키마 추가 — Qraft AI ETFs의 CMS API(`cms.etc-webmaker.com/holdings/{id}`)에서 전체 포트폴리오(101종목, 주수/시가/비중/FIGI)를 수집. LQAI를 yfinance(상위 ~10종목)에서 전환.
+
+**맥락**: Qraft 웹사이트의 "View Full Holdings" 버튼을 역공학해 발견한 비공개 CMS 엔드포인트. 최신 날짜만 반환하므로 과거 백필은 불가, 매일 누적 수집. CMS ID 매핑: LQAI=241, QRFT=132, AMOM=134 등.
+
+## ADR-016: 휴장 감지 — 전일 기준 + 토스증권 공식 캘린더
+
+**결정**: (1) 휴장 판정 기준을 "직전 평일"에서 "전일(달력일)"로 변경 — 전일이 주말/휴장이면 해당 시장 ETF 분석을 스킵하고, 전 시장 휴장 시 휴장 안내만 전송. (2) 토스증권 공식 market-calendar를 1순위 소스로 사용 (previousBusinessDay == 어제 → 세션 있었음), 기존 exchange_calendars+yfinance+웹검색은 폴백.
+
+**맥락**: 일요일 아침 실행이 금요일 세션을 보고 "시장 열림"으로 판단, 금요일 데이터끼리 비교해 "변화 없음"을 운용역의 의도적 보유처럼 서사화하는 오보고 발생. 또한 미국 휴장일에 벤치마크 수익률(market_returns)이 한국 ETF 분석에 새는 문제도 함께 수정.
+
+## ADR-017: 토스증권 Open API 클라이언트
+
+**결정**: 조회 전용 공유 클라이언트 `src/toss_api.py` (시세/캔들/환율/캘린더/실계좌). 주문 API는 의도적으로 미구현. OAuth client_credentials, 토큰 24시간 캐시.
+
+**맥락**: 3개 프로젝트(signalCatcher, investmentConsensus, etfAnalyzer) 공통 모듈. 이 프로젝트에서는 휴장 감지에 사용.

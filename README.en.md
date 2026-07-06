@@ -12,7 +12,9 @@ It distinguishes intentional portfolio moves by the fund manager from passive ch
 - **Benchmark Support** — VOO (S&P 500), QQQ (Nasdaq 100), and SOXX (Semiconductors) as benchmark ETFs in returns comparison
 - **On-demand Insight Query** — Type `/insight` in Discord DM to instantly retrieve the latest stored insight
 - **Auto Historical Backfill** — When a new ETF is added, automatically fills in missing historical data from the listing date
-- **Multi-source Scraping** — Auto-dispatches to timeetf, iShares CSV, Roundhill CSV, WisdomTree CSV, VistaShares CSV, or yfinance per ETF
+- **Multi-source Scraping** — Auto-dispatches to timeetf, iShares CSV, Roundhill CSV, WisdomTree CSV, VistaShares CSV, Qraft CMS API, or yfinance per ETF
+- **Holiday Detection** — Toss Securities official market calendar first (exchange_calendars + yfinance + web search fallback). On weekends/holidays sends a brief closure notice instead of a misleading "no change" narrative
+- **4-Panel Comic** — Daily report rendered as a comic strip via Gemini image model
 - **PDF Reports** — Dark-themed PDF reports with ReportLab + matplotlib charts (Pretendard font for Korean)
 - **Webhook Delivery** — Sends reports via Discord Webhook (independent of bot process)
 - **Auto Startup Tasks** — Automatically runs data collection and reporting on bot startup with 2-hour cooldown

@@ -4,9 +4,11 @@ from datetime import date, datetime, timedelta
 from typing import Callable, Awaitable
 
 import pytz
+import requests
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from src import database as db, scraper, analyzer
+from src.comic import generate_comic
 from src.config import SCHEDULE_HOUR, SCHEDULE_MINUTE
 from src.pdf_report import generate_daily_pdf
 
@@ -15,6 +17,152 @@ KST = pytz.timezone("Asia/Seoul")
 
 BACKFILL_START = date(2023, 5, 16)
 _BACKFILL_DELAY = 0.5  # seconds between requests
+
+
+def _market_for_etf(etf: dict) -> str:
+    yf = etf.get("yf_ticker") or ""
+    return "KR" if yf.endswith((".KS", ".KQ")) else "US"
+
+
+_CONSENSUS_TUNNEL = "/Users/haejoonlee/dev/investmentConsensus/logs/tunnel-url.txt"
+
+
+def _dashboard_link() -> str:
+    """ETF insights live on the investmentConsensus dashboard (/etf)."""
+    try:
+        url = open(_CONSENSUS_TUNNEL).read().strip()
+        return f"{url}/etf" if url else ""
+    except OSError:
+        return ""
+
+
+_EXCHANGE_CALENDARS: dict[str, object] = {}
+
+_YF_BENCHMARK = {"US": "SPY", "KR": "005930.KS"}
+
+
+def _get_exchange_cal(market: str):
+    import exchange_calendars as xcals
+    if market not in _EXCHANGE_CALENDARS:
+        code = "XKRX" if market == "KR" else "XNYS"
+        _EXCHANGE_CALENDARS[market] = xcals.get_calendar(code)
+    return _EXCHANGE_CALENDARS[market]
+
+
+def _check_cal_closed(market: str, check_date: date) -> bool:
+    try:
+        return not _get_exchange_cal(market).is_session(check_date)
+    except Exception:
+        logger.exception("exchange_calendars check failed for %s", market)
+        return False
+
+
+def _check_yf_closed(market: str, check_date: date) -> bool:
+    import yfinance as yf
+    ticker = _YF_BENCHMARK[market]
+    try:
+        hist = yf.Ticker(ticker).history(
+            start=str(check_date),
+            end=str(check_date + timedelta(days=1)),
+        )
+        return hist.empty
+    except Exception:
+        logger.exception("yfinance check failed for %s (%s)", market, ticker)
+        return False
+
+
+def _web_verify_market(market: str, check_date: date) -> bool | None:
+    from bs4 import BeautifulSoup
+    market_name = "NYSE" if market == "US" else "KRX Korea Exchange"
+    date_str = check_date.strftime("%Y-%m-%d")
+    date_long = check_date.strftime("%B %d, %Y")
+    try:
+        resp = requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": f"{market_name} stock market holiday closed {date_str}"},
+            headers={"User-Agent": scraper.HEADERS["User-Agent"]},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return None
+        soup = BeautifulSoup(resp.text, "lxml")
+        snippets = " ".join(r.get_text() for r in soup.select(".result__snippet, .result__title"))
+        snippets_lower = snippets.lower()
+        closed_kw = ["holiday", "closed", "market close", "휴장", "공휴일"]
+        open_kw = ["open", "trading", "개장"]
+        has_date = date_str in snippets or date_long.lower() in snippets_lower
+        closed_hits = sum(1 for w in closed_kw if w in snippets_lower)
+        open_hits = sum(1 for w in open_kw if w in snippets_lower)
+        if has_date and closed_hits > open_hits:
+            return True
+        if has_date and open_hits > closed_hits:
+            return False
+        return None
+    except Exception:
+        logger.exception("Web verification failed for %s on %s", market, check_date)
+        return None
+
+
+def _detect_closed_markets(today: date) -> set[str]:
+    """A market is 'closed' when the previous calendar day had no session.
+
+    The 08:00 KST report analyzes the previous day's trading. Weekends count as
+    closed — checking the previous *weekday* instead would make Sunday/Monday
+    runs compare stale Friday data against itself and narrate '변화 없음' as if
+    the manager chose to hold.
+
+    Primary source: Toss Securities official market calendar. Fallback:
+    exchange_calendars + yfinance + web verification.
+    """
+    closed = set()
+    for market in ("KR", "US"):
+        # Official calendar first — authoritative for both KR and US
+        try:
+            from src import toss_api
+            toss_result = toss_api.was_previous_day_session(market, today)
+        except Exception:
+            toss_result = None
+        if toss_result is not None:
+            if not toss_result:
+                closed.add(market)
+                logger.info("Market %s closed on %s (Toss official calendar)", market, today - timedelta(days=1))
+            continue
+
+        prev_bday = today - timedelta(days=1)
+        if prev_bday.weekday() >= 5:
+            closed.add(market)
+            logger.info("Market %s: %s is a weekend — no new session to analyze", market, prev_bday)
+            continue
+
+        cal_closed = _check_cal_closed(market, prev_bday)
+        yf_closed = _check_yf_closed(market, prev_bday)
+
+        if cal_closed == yf_closed:
+            if cal_closed:
+                closed.add(market)
+                logger.info("Market %s closed on %s (calendar + yfinance agree)", market, prev_bday)
+            continue
+
+        logger.warning(
+            "Market %s on %s: calendar=%s, yfinance=%s — running web verification",
+            market, prev_bday,
+            "closed" if cal_closed else "open",
+            "closed" if yf_closed else "open",
+        )
+        web_result = _web_verify_market(market, prev_bday)
+        if web_result is True:
+            closed.add(market)
+            logger.info("Market %s closed on %s (web verified)", market, prev_bday)
+        elif web_result is False:
+            logger.info("Market %s open on %s (web verified)", market, prev_bday)
+        else:
+            if cal_closed:
+                closed.add(market)
+            logger.info(
+                "Market %s on %s: web inconclusive, trusting exchange_calendars (%s)",
+                market, prev_bday, "closed" if cal_closed else "open",
+            )
+    return closed
 
 
 async def run_daily_job(send_fn: Callable[..., Awaitable]):
@@ -32,20 +180,51 @@ async def run_daily_job(send_fn: Callable[..., Awaitable]):
     etfs = db.get_all_etfs()
     all_changes = []
     report_sections = []
+    scrape_failures = []
+
+    # ── Collect daily returns FIRST (needed for market context) ──────────
+    returns_summary = await _collect_daily_returns(etfs, today_str)
+    market_returns = _build_market_returns_context(etfs)
+
+    # ── Detect closed markets and filter ─────────────────────────────────
+    closed_markets = _detect_closed_markets(today)
+    if closed_markets:
+        logger.info("Closed markets: %s — skipping those ETFs", closed_markets)
+        etf_market_map = {dict(e)["ticker"]: _market_for_etf(dict(e)) for e in etfs}
+        returns_summary = [r for r in returns_summary if etf_market_map.get(r["ticker"], "US") not in closed_markets]
+        if "US" in closed_markets:
+            market_returns = ""
+
+    if {"KR", "US"} <= closed_markets:
+        prev_day = today - timedelta(days=1)
+        reason = "주말" if prev_day.weekday() >= 5 else "휴장일"
+        # Save marker so the 09:00 recovery check doesn't re-send this notice
+        db.save_market_insight(today_str, f"{reason} — 신규 거래 데이터 없음, 보고서 생략")
+        await send_fn(
+            f"📅 **{today_str} ETF 일일 보고서**\n"
+            f"전일({prev_day})은 {reason}로 한국·미국 시장 모두 거래가 없었습니다. "
+            f"분석할 신규 데이터가 없어 오늘 보고서는 생략합니다."
+        )
+        logger.info("All markets closed — holiday notice sent, skipping report")
+        return
 
     for etf in etfs:
         etf = dict(etf)
         if etf.get("benchmark"):
+            continue
+        if _market_for_etf(etf) in closed_markets:
+            logger.info("Skipping %s — %s market closed", etf["name"], _market_for_etf(etf))
             continue
         try:
             # ── Backfill missing dates before today ───────────────────────
             await _backfill_gaps(etf, today)
 
             # ── Scrape today ──────────────────────────────────────────────
-            data = scraper.fetch_holdings(etf["url"], today)
+            data = scraper.fetch_holdings(etf["url"], today, yf_ticker=etf.get("yf_ticker"))
             if not data:
                 db.save_no_data_date(etf["id"], today_str)
                 logger.info(f"No data for {etf['name']} on {today_str}, trying latest snapshots")
+                scrape_failures.append({"name": etf["name"], "ticker": etf["ticker"], "reason": "데이터 없음 (폴백 사용)"})
                 # Fallback: generate report from most recent 2 snapshots
                 await _report_from_latest_snapshots(etf, today_str, report_sections)
                 continue
@@ -72,19 +251,23 @@ async def run_daily_job(send_fn: Callable[..., Awaitable]):
             # ── ETF report ───────────────────────────────────────────────────
             prev_insight_row = db.get_latest_insight(etf["id"])
             prev_insight = prev_insight_row["insight_text"] if prev_insight_row else ""
-            etf_report = analyzer.generate_etf_report(changes, prev_insight)
+            etf_report = analyzer.generate_etf_report(changes, prev_insight, market_returns=market_returns)
             db.save_daily_report(etf["id"], today_str, etf_report)
             report_sections.append((etf["name"], etf["ticker"], etf_report))
 
-        except Exception:
+        except Exception as exc:
             logger.exception(f"Error processing ETF {etf['name']}")
+            scrape_failures.append({"name": etf["name"], "ticker": etf["ticker"], "reason": str(exc)[:80]})
 
-    # ── Collect daily returns for all ETFs ──────────────────────────────────
-    returns_summary = await _collect_daily_returns(etfs, today_str)
+    # ── Data health check + auto-recovery ────────────────────────────────
+    health_alerts = await _check_data_health(etfs, today_str)
 
     if not report_sections:
-        if returns_summary:
-            await send_fn(_build_returns_only_message(today_str, returns_summary))
+        if returns_summary or health_alerts:
+            msg = _build_returns_only_message(today_str, returns_summary) if returns_summary else f"📅 **{today_str} ETF 일일 보고서**"
+            if health_alerts:
+                msg += "\n" + _format_health_alerts(health_alerts)
+            await send_fn(msg)
         else:
             logger.info("No report sections today — nothing to send")
         return
@@ -92,18 +275,22 @@ async def run_daily_job(send_fn: Callable[..., Awaitable]):
     # ── Market headline ───────────────────────────────────────────────────────
     headline = ""
     if all_changes:
-        headline = analyzer.generate_market_headline(all_changes)
+        headline = analyzer.generate_market_headline(all_changes, market_returns=market_returns)
         db.save_market_insight(today_str, headline)
 
-    # ── Generate PDF + compact Discord summary ────────────────────────────────
+    # ── Generate PDF + comic + compact Discord summary ─────────────────────
     try:
         pdf_path = generate_daily_pdf(today_str, headline, returns_summary, report_sections)
     except Exception:
         logger.exception("PDF generation failed, falling back to text-only")
         pdf_path = None
 
-    compact = _build_compact_message(today_str, headline, returns_summary, report_sections)
-    await send_fn(compact, pdf_path)
+    comic_data = _build_comic_data(today_str, headline, returns_summary, report_sections)
+    comic_path = generate_comic(comic_data, today_str)
+
+    compact = _build_compact_message(today_str, headline, returns_summary, report_sections, health_alerts, scrape_failures)
+    extra_files = [comic_path] if comic_path else None
+    await send_fn(compact, pdf_path, extra_files=extra_files)
     logger.info("Daily report sent")
 
 
@@ -154,14 +341,34 @@ def _build_message(date_str: str, headline: str, sections: list, returns_summary
     return "\n".join(parts)
 
 
+def _truncate_to_sentence(text: str, max_len: int) -> str:
+    if len(text) <= max_len:
+        return text
+    for sep in ("다. ", "다.\n", ". ", ".\n"):
+        idx = text.rfind(sep, 0, max_len)
+        if idx != -1:
+            return text[: idx + len(sep) - 1].rstrip()
+    return text[:max_len].rstrip() + "…"
+
+
+def _etf_short_name(name: str, ticker: str) -> str:
+    short_map = {
+        "456600": "글로벌AI",
+        "426030": "나스닥100",
+        "385720": "코스피",
+    }
+    return short_map.get(ticker, ticker)
+
+
 def _build_compact_message(
-    date_str: str, headline: str, returns_summary: list | None, sections: list
+    date_str: str, headline: str, returns_summary: list | None, sections: list,
+    health_alerts: list | None = None, scrape_failures: list | None = None,
 ) -> str:
     """Discord-friendly compact summary (single message, < 1900 chars)."""
     parts = [f"📅 **{date_str} ETF 일일 보고서**"]
 
     if headline:
-        short_headline = headline.split("\n")[0][:200]
+        short_headline = _truncate_to_sentence(headline.split("\n")[0], 300)
         parts.append(f"🌐 {short_headline}")
 
     if returns_summary:
@@ -169,28 +376,71 @@ def _build_compact_message(
         for r in returns_summary:
             arrow = "🔺" if r["daily_pct"] and r["daily_pct"] > 0 else "🔻" if r["daily_pct"] and r["daily_pct"] < 0 else "➖"
             daily = f"{r['daily_pct']:+.2f}%" if r["daily_pct"] is not None else "N/A"
-            parts.append(f"{arrow} **{r['name'][:10]}** {r['close']:.0f} | {daily}")
+            label = _etf_short_name(r["name"], r["ticker"])
+            parts.append(f"{arrow} **{label}** ({r['ticker']}) {r['close']:.0f} | {daily}")
 
-    if sections:
+    changed_sections = [
+        s for s in sections
+        if "변화 없음" not in s[2][:200]
+    ]
+    if changed_sections:
         parts.append("\n📊 **ETF별 핵심 변화**")
-        for section in sections:
+        for section in changed_sections:
             name, ticker, report = section[0], section[1], section[2]
+            label = _etf_short_name(name, ticker)
             first_line = ""
             for line in report.split("\n"):
                 stripped = line.strip()
                 if stripped and not stripped.startswith("**") and len(stripped) > 5:
-                    first_line = stripped[:100]
+                    first_line = _truncate_to_sentence(stripped, 120)
                     break
             if first_line:
-                parts.append(f"• **{name[:10]}**: {first_line}")
+                parts.append(f"• **{label}** ({ticker}): {first_line}")
+
+    if scrape_failures:
+        parts.append("\n🚨 **크롤링 실패**")
+        for f in scrape_failures:
+            label = _etf_short_name(f["name"], f["ticker"])
+            parts.append(f"• **{label}** ({f['ticker']}): {f['reason']}")
+
+    if health_alerts:
+        parts.append(_format_health_alerts(health_alerts))
 
     parts.append("\n📎 상세 분석은 첨부 PDF를 확인하세요.")
+    dash = _dashboard_link()
+    if dash:
+        parts.append(f"📊 대시보드: {dash}")
+    return "\n".join(parts)
+
+
+def _build_comic_data(
+    date_str: str, headline: str,
+    returns_summary: list | None, sections: list,
+) -> str:
+    parts = [f"{date_str} ETF 일일 보고서\n"]
+    if headline:
+        parts.append(f"시장 헤드라인: {headline}\n")
+    if returns_summary:
+        parts.append("ETF 수익률:")
+        for r in returns_summary:
+            daily = f"{r['daily_pct']:+.2f}%" if r["daily_pct"] is not None else "N/A"
+            parts.append(f"  {r['ticker']}: {daily}")
+        parts.append("")
+    for section in sections:
+        if "변화 없음" in section[2][:200]:
+            continue
+        parts.append(f"[{section[0]} ({section[1]})]")
+        parts.append(section[2][:500])
+        parts.append("")
     return "\n".join(parts)
 
 
 def _build_returns_only_message(date_str: str, returns_summary: list) -> str:
     parts = [f"📅 **{date_str} ETF 수익률 현황**\n"]
     parts.append(_format_returns_table(returns_summary))
+    dash = _dashboard_link()
+    if dash:
+        parts.append(f"\n📊 대시보드: {dash}")
     return "\n".join(parts)
 
 
@@ -214,7 +464,9 @@ async def _collect_daily_returns(etfs: list, today_str: str) -> list[dict]:
         if not yf_ticker:
             continue
         try:
-            returns = scraper.fetch_etf_returns(yf_ticker, period="1mo")
+            existing = db.get_returns(etf["id"], days=1)
+            fetch_period = "2y" if not existing else "1mo"
+            returns = scraper.fetch_etf_returns(yf_ticker, period=fetch_period)
             if returns:
                 db.save_returns(etf["id"], returns)
                 latest = returns[-1]
@@ -241,6 +493,21 @@ def _calc_period_return(returns: list[dict], days: int) -> float | None:
     if start == 0:
         return None
     return round(((end / start) - 1) * 100, 4)
+
+
+def _build_market_returns_context(etfs: list) -> str:
+    """Build a text summary of benchmark ETF returns for LLM context."""
+    lines = []
+    for etf in etfs:
+        etf = dict(etf)
+        if not etf.get("benchmark"):
+            continue
+        ret = db.get_latest_return(etf["id"])
+        if ret and ret["daily_return_pct"] is not None:
+            lines.append(f"- {etf['name']} ({etf['ticker']}): {ret['date']} 종가 기준 일간 {ret['daily_return_pct']:+.2f}%")
+    if not lines:
+        return ""
+    return "전일 미국 시장 실제 수익률 (yfinance 기준):\n" + "\n".join(lines)
 
 
 async def _report_from_latest_snapshots(etf: dict, today_str: str, report_sections: list):
@@ -298,7 +565,7 @@ async def _backfill_gaps(etf: dict, today: date):
     for d in missing:
         date_str = str(d)
         try:
-            data = scraper.fetch_holdings(etf["url"], d)
+            data = scraper.fetch_holdings(etf["url"], d, yf_ticker=etf.get("yf_ticker"))
             if data:
                 db.save_snapshot(etf["id"], date_str, data["aum_100m"], data["holdings"])
                 logger.debug(f"  Backfilled {date_str}: {len(data['holdings'])} holdings")
@@ -339,18 +606,7 @@ async def run_startup_job(send_fn: Callable[..., Awaitable]):
     today_str = str(today)
     logger.info(f"Startup job started for {today_str}")
 
-    # 1. Backfill + daily report (reuse run_daily_job but force re-run even if done today)
-    latest_market = db.get_latest_market_insight()
-    already_done = latest_market and latest_market["date"] == today_str
-    if already_done:
-        # Delete today's market insight to force re-run
-        import sqlite3
-        from src.config import DB_PATH
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("DELETE FROM market_insights WHERE date = ?", (today_str,))
-        conn.commit()
-        conn.close()
-
+    # 1. Backfill + daily report (idempotent — skips if already done today)
     await run_daily_job(send_fn)
 
     # 2. Refresh insights if latest is >7 days old
@@ -404,6 +660,119 @@ async def run_weekly_insight_job():
             logger.exception(f"Error generating weekly insight for {etf['name']}")
 
 
+def _count_weekday_gap(from_date: date, to_date: date) -> int:
+    """Count weekdays strictly between from_date and to_date (both exclusive)."""
+    count = 0
+    d = from_date + timedelta(days=1)
+    while d < to_date:
+        if d.weekday() < 5:
+            count += 1
+        d += timedelta(days=1)
+    return count
+
+
+async def _check_data_health(etfs: list, today_str: str) -> list[dict]:
+    """Detect ETFs with consecutive data failures and attempt yfinance recovery."""
+    today = date.fromisoformat(today_str)
+    alerts = []
+
+    for etf in etfs:
+        etf = dict(etf)
+        if etf.get("benchmark"):
+            continue
+
+        last_snap_str = db.get_latest_snapshot_date(etf["id"])
+        if not last_snap_str:
+            continue
+
+        last_snap = date.fromisoformat(last_snap_str)
+        gap = _count_weekday_gap(last_snap, today)
+
+        if gap >= 3:
+            alert = {
+                "name": etf["name"],
+                "ticker": etf["ticker"],
+                "gap_days": gap,
+                "last_data": last_snap_str,
+                "recovered": False,
+                "recovery_method": None,
+            }
+
+            today_has_snapshot = db.get_snapshot(etf["id"], today_str) is not None
+            yf_ticker = etf.get("yf_ticker")
+
+            if not today_has_snapshot and yf_ticker:
+                try:
+                    data = scraper.fetch_holdings(f"yfinance://{yf_ticker}", today)
+                    if data and data["holdings"]:
+                        db.save_snapshot(etf["id"], today_str, data["aum_100m"], data["holdings"])
+                        db.delete_no_data_date(etf["id"], today_str)
+                        alert["recovered"] = True
+                        alert["recovery_method"] = "yfinance"
+                        logger.info("Health: %s recovered via yfinance", etf["name"])
+                except Exception:
+                    logger.exception("Health: recovery failed for %s", etf["name"])
+
+            alerts.append(alert)
+
+        elif last_snap_str == today_str:
+            prev = db.get_prev_snapshot(etf["id"], today_str)
+            if prev:
+                prev_gap = _count_weekday_gap(date.fromisoformat(prev["date"]), today)
+                if prev_gap >= 5:
+                    alerts.append({
+                        "name": etf["name"],
+                        "ticker": etf["ticker"],
+                        "gap_days": prev_gap,
+                        "last_data": prev["date"],
+                        "recovered": True,
+                        "recovery_method": "정상 복구",
+                    })
+
+    return alerts
+
+
+def _format_health_alerts(health_alerts: list) -> str:
+    parts = ["\n⚠️ **데이터 수집 현황**"]
+    for a in health_alerts:
+        if a["recovered"]:
+            parts.append(
+                f"✅ **{a['ticker']}**: {a['gap_days']}일간 수집 실패 "
+                f"→ {a['recovery_method']} 폴백 복구 성공"
+            )
+        else:
+            parts.append(
+                f"🚨 **{a['ticker']}**: {a['gap_days']}일 연속 수집 실패 "
+                f"(최종 데이터: {a['last_data']}) — 수동 확인 필요"
+            )
+    return "\n".join(parts)
+
+
+async def _recovery_check(send_fn: Callable[..., Awaitable]):
+    """Runs at 09:00 — if today's report wasn't generated at 08:00, retry it."""
+    today = datetime.now(KST).date()
+    today_str = str(today)
+    latest_market = db.get_latest_market_insight()
+    if latest_market and latest_market["date"] == today_str:
+        logger.info("Recovery check: today's report already exists, skipping")
+        return
+    logger.warning("Recovery check: today's report missing, retrying daily job")
+    try:
+        await run_daily_job(send_fn)
+    except Exception:
+        logger.exception("Recovery check: retry also failed")
+        import os, httpx
+        webhook = os.environ.get("DISCORD_WEBHOOK_URL")
+        if webhook:
+            try:
+                httpx.Client(timeout=10).post(
+                    webhook,
+                    json={"content": f"⚠️ **ETF 레포트 생성 실패** ({today_str})\n08:00 트리거 + 09:00 재시도 모두 실패. 수동 확인 필요."},
+                )
+            except Exception:
+                pass
+
+
 def setup_scheduler(send_fn: Callable[..., Awaitable]) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=KST)
     scheduler.add_job(
@@ -414,6 +783,7 @@ def setup_scheduler(send_fn: Callable[..., Awaitable]) -> AsyncIOScheduler:
         args=[send_fn],
         id="daily_etf_job",
         replace_existing=True,
+        misfire_grace_time=300,
     )
     scheduler.add_job(
         run_weekly_insight_job,
@@ -423,6 +793,17 @@ def setup_scheduler(send_fn: Callable[..., Awaitable]) -> AsyncIOScheduler:
         minute=0,
         id="weekly_insight_job",
         replace_existing=True,
+        misfire_grace_time=300,
+    )
+    scheduler.add_job(
+        _recovery_check,
+        trigger="cron",
+        hour=9,
+        minute=0,
+        args=[send_fn],
+        id="recovery_check",
+        replace_existing=True,
+        misfire_grace_time=600,
     )
     scheduler.start()
     logger.info(

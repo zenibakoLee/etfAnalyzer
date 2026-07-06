@@ -4,9 +4,9 @@ import logging
 from aiohttp import web
 
 from src import database as db
-from src.bot import bot, send_report
-from src.config import DISCORD_BOT_TOKEN, PORT
+from src.config import PORT
 from src.scheduler import setup_scheduler
+from src.webhook import send_report
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,15 +33,9 @@ async def main():
     await site.start()
     logger.info(f"Health server listening on port {PORT}")
 
-    logger.info("Starting Discord bot...")
-    await bot.start(DISCORD_BOT_TOKEN)
-
-
-def _run():
-    """Called by watchfiles subprocess on each restart."""
-    asyncio.run(main())
+    while True:
+        await asyncio.sleep(3600)
 
 
 if __name__ == "__main__":
-    from watchfiles import run_process
-    run_process("src/", target=_run)
+    asyncio.run(main())

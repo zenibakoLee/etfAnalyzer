@@ -5,14 +5,16 @@ ETF 일별 보유종목 변화를 자동 분석하여 매일 아침 Discord DM�
 
 ## 주요 기능
 
-- **일일 자동 리포트** — 매일 08:00 KST, ETF 보유종목 변화 분석 결과를 Discord DM으로 전송
+- **일일 자동 리포트** — 매일 08:00 KST, ETF 보유종목 변화 분석 결과를 Discord로 전송 (investmentConsensus 대시보드 링크 포함)
 - **의도적 변화 감지** — 설정/해지(creation/redemption) 영향을 제거하고 운용역의 순수한 매수/매도 식별
 - **주간 인사이트** — 매주 일요일 10:00 KST, 누적 이력 기반 운용 원칙 분석 및 저장
 - **수익률 비교** — `/returns` 명령어로 전 ETF 일간/주간/월간/3개월/6개월/YTD/연간 수익률 비교
 - **벤치마크 지원** — VOO(S&P 500), QQQ(Nasdaq 100)를 벤치마크로 수익률 비교에 포함
 - **온디맨드 인사이트 조회** — Discord에서 `/insight` 명령어로 최신 인사이트 즉시 확인
 - **이력 자동 백필** — 새 ETF 추가 시 등록일부터 누락 데이터 자동 수집
-- **멀티소스 스크래핑** — timeetf, iShares CSV, Roundhill CSV, WisdomTree CSV, VistaShares CSV, yfinance 등 소스별 자동 디스패치
+- **멀티소스 스크래핑** — timeetf, iShares CSV, Roundhill CSV, WisdomTree CSV, VistaShares CSV, Qraft CMS API, yfinance 등 소스별 자동 디스패치
+- **휴장 감지** — 토스증권 공식 market-calendar 1순위 (exchange_calendars+yfinance+웹검색 폴백). 주말/휴장일엔 무의미한 "변화 없음" 리포트 대신 휴장 안내만 전송
+- **4컷만화** — Gemini 이미지 모델로 일일 리포트를 4컷만화로 변환하여 첨부
 - **PDF 리포트** — ReportLab + matplotlib 기반 다크 테마 PDF 보고서 (Pretendard 폰트, 차트 시각화 포함)
 - **Webhook 전송** — Discord Webhook을 통한 리포트 전송 (봇 프로세스와 독립적으로 동작)
 - **자동 시작 작업** — 봇 기동 시 2시간 쿨다운 기반 자동 데이터 수집 및 리포트 생성
@@ -33,6 +35,7 @@ ETF 일별 보유종목 변화를 자동 분석하여 매일 아침 Discord DM�
 | Invesco QQQ Trust | QQQ | yfinance | 벤치마크 |
 | iShares Semiconductor ETF | SOXX | yfinance | 벤치마크 |
 | VistaShares AI Supercycle ETF | AIS | VistaShares CSV | 분석 대상 (비활성) |
+| LG QRAFT AI-Powered U.S. Large Cap Core ETF | LQAI | Qraft CMS API (101종목 전체) | 분석 대상 |
 
 벤치마크 ETF는 수익률 비교에만 사용되며, 일일 리포트/종합 인사이트에서는 제외됩니다.
 

@@ -121,6 +121,7 @@ _REPORT_SYSTEM = """당신은 ETF 포트폴리오 분석 전문가입니다. 한
    - 해당 종목의 가격 움직임으로 인한 자연적 비중 변화
    - 운용역 행동 없이 시장가격이 반영된 결과
    - 드리프트 방향이 (+)이면 해당 종목이 시장 대비 초과 수익
+   - ⚠️ **중요: 한국 ETF의 해외종목 데이터는 T+1 시차가 있을 수 있음** — 보유종목 평가금액이 전일 미국장 종가를 아직 반영하지 못한 경우, 드리프트 방향이 실제 시장과 반대로 나타날 수 있음
 
 ### 베이스라인 비율 해석
 - 1.0 초과: 설정(신규 자금 유입), ETF 전체 규모 증가 → 운용역이 기존 비율로 모든 종목을 늘림
@@ -143,6 +144,12 @@ _REPORT_SYSTEM = """당신은 ETF 포트폴리오 분석 전문가입니다. 한
 2. 의도적 변화 규모 → 확신도와 방향성
 3. 비중 드리프트 패턴 → 기존 보유 종목의 상대 성과
 4. 현금 비중 변화 → 리스크 관리 스탠스
+
+### 실제 시장 데이터 교차 검증 (중요)
+미국 벤치마크 실제 수익률이 함께 제공되면 반드시 교차 검증하세요:
+- 보유종목 비중 드리프트가 (+)인데 해당 섹터 벤치마크가 큰 폭 하락이면 → **데이터 시차로 인한 착시**이므로 "강세"로 해석하면 안 됨
+- 반도체 종목 비중이 올랐는데 SOXX가 -5% 이상이면 → "실제 시장에서는 반도체 섹터가 급락했으나, 보유종목 데이터에는 아직 반영되지 않음"으로 서술
+- 드리프트 해석 시 실제 시장 수익률과 방향이 일치하는지 항상 확인
 
 ### 맥락 활용
 과거 누적 인사이트가 제공된 경우, 오늘 변화를 해당 ETF의 운용 스타일·원칙과 비교하여 일관성 여부나 새로운 패턴을 파악하세요.
@@ -203,13 +210,19 @@ _HEADLINE_SYSTEM = """당신은 ETF 시장 전문가입니다. 복수의 ETF 일
 - 대형주 vs 소형주 선호도 변화
 - 유동성 선호 vs 성장 테마 접근
 
+### 5. 실제 시장 데이터 교차 검증
+미국 벤치마크 실제 수익률이 함께 제공되면, 보유종목 드리프트 방향과 실제 시장 방향이 일치하는지 반드시 확인하세요.
+- 한국 ETF의 해외종목 데이터는 T+1 시차가 있을 수 있어, 비중 드리프트가 실제 시장과 반대로 나타날 수 있음
+- 드리프트와 실제 수익률이 모순되면, 실제 수익률을 기준으로 서술하고 데이터 시차를 언급
+
 ## 출력 형식
 
 오늘 시장의 큰 그림을 **2-3문장**으로 한국어로 요약하세요.
 - 어떤 섹터/테마가 부각되고 있는지
 - 전반적인 포지셔닝 변화가 무엇을 시사하는지
 - 여러 ETF에 공통적으로 나타나는 패턴이 있다면 강조
-- 문장은 명확하고 구체적으로, 수치를 포함하면 더 좋음"""
+- 문장은 명확하고 구체적으로, 수치를 포함하면 더 좋음
+- 실제 벤치마크 수익률과 보유종목 드리프트가 모순되면 반드시 명시"""
 
 _INSIGHT_SYSTEM = """당신은 ETF 운용 전문가이자 퀀트 분석가입니다. 장기 운용 이력 데이터를 통해 ETF 운용역의 투자 철학, 원칙, 패턴을 역추적합니다.
 
@@ -289,9 +302,10 @@ _INSIGHT_SYSTEM = """당신은 ETF 운용 전문가이자 퀀트 분석가입니
 - 장기 보유 투자자와 단기 트레이더 각각의 관점에서 다른 시사점이 있다면 구분하여 제시"""
 
 
-def generate_etf_report(changes: dict, prev_insight: str = "") -> str:
+def generate_etf_report(changes: dict, prev_insight: str = "", market_returns: str = "") -> str:
     changes_summary = _format_changes(changes)
     prior_context = f"\n---\n과거 누적 인사이트:\n{prev_insight}" if prev_insight else ""
+    market_ctx = f"\n---\n{market_returns}" if market_returns else ""
 
     response = _get_client().messages.create(
         model="claude-sonnet-4-6",
@@ -310,7 +324,7 @@ def generate_etf_report(changes: dict, prev_insight: str = "") -> str:
                     f"ETF: {changes['etf_name']}\n"
                     f"날짜: {changes['date']}\n"
                     f"베이스라인 비율(설정/해지): {changes.get('baseline_ratio', 1.0):.4f}\n\n"
-                    f"변화 내역:\n{changes_summary}{prior_context}"
+                    f"변화 내역:\n{changes_summary}{prior_context}{market_ctx}"
                 ),
             }
         ],
@@ -318,10 +332,12 @@ def generate_etf_report(changes: dict, prev_insight: str = "") -> str:
     return response.content[0].text
 
 
-def generate_market_headline(all_changes: list) -> str:
+def generate_market_headline(all_changes: list, market_returns: str = "") -> str:
     summaries = "\n\n".join(
         f"[{c['etf_name']}]\n{_format_changes(c)}" for c in all_changes
     )
+    if market_returns:
+        summaries += f"\n\n---\n{market_returns}"
     response = _get_client().messages.create(
         model="claude-sonnet-4-6",
         max_tokens=3000,

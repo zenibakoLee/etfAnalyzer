@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import pathlib
 import time
 import pytz
 from datetime import datetime, date, timedelta
@@ -140,7 +141,7 @@ _T = {
         "en": "(no data)",
     },
     "returns_choose_period": {
-        "ko": "📈 **수익률 비교 — 기간을 선택하세요:**\n\n1. 일간 (1일)\n2. 주간 (5일)\n3. 월간 (1개월)\n4. 연간 (1년)\n\n번호를 입력하세요.",
+        "ko": "📈 **수익률 비교 — 기간을 선택하세요:**\n\n1. 일간 (1일)\n2. 주간 (5일)\n3. 월간 (1개월)\n4. 3개월\n5. 6개월\n6. YTD (연초대비)\n7. 연간 (1년)\n\n번호를 입력하세요.",
         "en": "📈 **Returns comparison — choose a period:**\n\n1. Daily (1d)\n2. Weekly (5d)\n3. Monthly (1mo)\n4. Yearly (1yr)\n\nEnter a number.",
     },
     "returns_header": {
@@ -164,11 +165,20 @@ async def on_ready():
     asyncio.create_task(_startup_greeting())
 
 
+_URL_KEYWORDS = {"배포주소", "주소", "url"}
+
+
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
+
     if not isinstance(message.channel, discord.DMChannel):
+        lower = message.content.strip().lower()
+        if any(kw in lower for kw in _URL_KEYWORDS):
+            urls = _read_dashboard_urls()
+            if urls:
+                await message.channel.send(f"📡 **현재 대시보드 주소**\n{urls}")
         return
 
     user_id = message.author.id
@@ -189,17 +199,6 @@ async def on_message(message: discord.Message):
                 await message.channel.send("Sorry, I couldn't recognize that. Try: Korean, 한국어, English, 영어...")
             return
 
-        if state["state"] == "awaiting_startup_confirm":
-            del _user_states[user_id]
-            if content.lower() in _CONFIRM_KEYWORDS:
-                await message.channel.send(t("startup_running"))
-                from src.scheduler import run_startup_job
-                await run_startup_job(send_report)
-                await message.channel.send(t("startup_done"))
-            else:
-                await message.channel.send(t("cancelled"))
-            return
-
         if state["state"] == "awaiting_report_generate_confirm":
             del _user_states[user_id]
             if content.lower() in _CONFIRM_KEYWORDS:
@@ -210,12 +209,12 @@ async def on_message(message: discord.Message):
 
         if state["state"] == "awaiting_returns_period":
             del _user_states[user_id]
-            period_map = {"1": "daily", "2": "weekly", "3": "monthly", "4": "yearly"}
+            period_map = {"1": "daily", "2": "weekly", "3": "monthly", "4": "3month", "5": "6month", "6": "ytd", "7": "yearly"}
             choice = content.strip()
             if choice in period_map:
                 await _send_returns_comparison(message.channel, period_map[choice])
             else:
-                await message.channel.send(t("out_of_range", n=4))
+                await message.channel.send(t("out_of_range", n=7))
             return
 
         # Selection states
@@ -247,6 +246,22 @@ async def on_message(message: discord.Message):
 
 # ── Startup flow ──────────────────────────────────────────────────────────────
 
+def _read_dashboard_urls() -> str:
+    import pathlib
+    urls = []
+    for label, path in [
+        ("Signal Catcher", pathlib.Path.home() / "dev/singalCatcher/data/logs/tunnel-url.txt"),
+        ("Investment Consensus", pathlib.Path.home() / "dev/investmentConsensus/logs/tunnel-url.txt"),
+    ]:
+        try:
+            url = path.read_text().strip()
+            if url:
+                urls.append(f"🔗 {label}: {url}")
+        except FileNotFoundError:
+            pass
+    return "\n".join(urls)
+
+
 async def _startup_greeting():
     await asyncio.sleep(1)  # wait for bot to fully connect
     try:
@@ -257,10 +272,26 @@ async def _startup_greeting():
             _user_states[DISCORD_USER_ID] = {"state": "awaiting_language_selection"}
         else:
             channel = await user.create_dm()
-            await channel.send(t("greeting", lang))
+            greeting = t("greeting", lang)
+            restart_reason = _read_restart_reason()
+            if restart_reason:
+                greeting += f"\n\n📋 **재시작 사유:** {restart_reason}"
+            dashboard_urls = _read_dashboard_urls()
+            if dashboard_urls:
+                greeting += f"\n\n📡 **대시보드**\n{dashboard_urls}"
+            await channel.send(greeting)
             await _send_startup_status(channel)
     except Exception:
         logger.exception("Failed to send startup greeting")
+
+
+def _read_restart_reason() -> str | None:
+    reason_file = pathlib.Path(__file__).resolve().parent.parent / "data" / "restart-reason.txt"
+    if reason_file.exists():
+        reason = reason_file.read_text().strip()
+        reason_file.unlink()
+        return reason
+    return None
 
 
 async def _send_startup_status(channel):
@@ -336,9 +367,35 @@ async def _send_startup_status(channel):
         task_lines.append("💡 **인사이트 갱신 필요:**" if ko else "💡 **Insight refresh needed:**")
         task_lines.extend(insight_tasks)
 
-    ask = t("ask_startup", lang)
-    await channel.send(f"{header}\n{body}\n\n" + "\n".join(task_lines) + f"\n{ask}")
-    _user_states[DISCORD_USER_ID] = {"state": "awaiting_startup_confirm"}
+    status_msg = f"{header}\n{body}\n\n" + "\n".join(task_lines)
+
+    last_run = db.get_preference("last_startup_run")
+    now = datetime.now(KST)
+    cooldown_ok = True
+    if last_run:
+        try:
+            elapsed = (now - datetime.fromisoformat(last_run)).total_seconds()
+            if elapsed < 7200:
+                cooldown_ok = False
+        except ValueError:
+            pass
+
+    if not cooldown_ok:
+        await channel.send(status_msg + ("\n\n⏭️ 최근 2시간 내 실행 이력이 있어 자동 작업을 건너뜁니다." if ko
+                                          else "\n\n⏭️ Startup job ran recently, skipping auto-run."))
+        return
+
+    running_note = "\n\n⏳ 자동으로 작업을 시작합니다..." if ko else "\n\n⏳ Auto-running tasks..."
+    await channel.send(status_msg + running_note)
+
+    from src.scheduler import run_startup_job
+    try:
+        db.save_preference("last_startup_run", now.isoformat())
+        await run_startup_job(send_report)
+        await channel.send(t("startup_done", lang))
+    except Exception:
+        logger.exception("Auto startup job failed")
+        await channel.send("⚠️ 자동 시작 작업 중 오류가 발생했습니다." if ko else "⚠️ Auto startup job failed.")
 
 
 def _parse_language(content: str) -> str | None:
@@ -457,23 +514,46 @@ async def _send_returns_comparison(channel, period: str):
     lang = db.get_preference("language") or "en"
     today = datetime.now(KST).date()
 
+    from dateutil.relativedelta import relativedelta
+
     period_labels = {
-        "daily":   {"ko": "일간 (1일)", "en": "Daily (1d)", "days": 1},
-        "weekly":  {"ko": "주간 (5일)", "en": "Weekly (5d)", "days": 5},
-        "monthly": {"ko": "월간 (1개월)", "en": "Monthly (1mo)", "days": 21},
-        "yearly":  {"ko": "연간 (1년)", "en": "Yearly (1yr)", "days": 252},
+        "daily":   {"ko": "일간 (1일)", "en": "Daily (1d)"},
+        "weekly":  {"ko": "주간 (5일)", "en": "Weekly (5d)"},
+        "monthly": {"ko": "월간 (1개월)", "en": "Monthly (1mo)"},
+        "3month":  {"ko": "3개월", "en": "3 Months"},
+        "6month":  {"ko": "6개월", "en": "6 Months"},
+        "ytd":     {"ko": "YTD (연초대비)", "en": "YTD"},
+        "yearly":  {"ko": "연간 (1년)", "en": "Yearly (1yr)"},
     }
     p = period_labels[period]
     label = p[lang]
-    days_needed = p["days"]
+
+    lookback_map = {
+        "daily": today - timedelta(days=5),
+        "weekly": today - timedelta(days=10),
+        "monthly": today - relativedelta(months=1) - timedelta(days=5),
+        "3month": today - relativedelta(months=3) - timedelta(days=5),
+        "6month": today - relativedelta(months=6) - timedelta(days=5),
+        "ytd": date(today.year, 1, 1) - timedelta(days=5),
+        "yearly": today - relativedelta(years=1) - timedelta(days=5),
+    }
+    target_start_map = {
+        "monthly": today - relativedelta(months=1),
+        "3month": today - relativedelta(months=3),
+        "6month": today - relativedelta(months=6),
+        "ytd": date(today.year, 1, 1),
+        "yearly": today - relativedelta(years=1),
+    }
+    lookback_date = str(lookback_map[period])
+    target_start = target_start_map.get(period)
 
     etfs = [dict(e) for e in db.get_all_etfs()]
     rows = []
 
     for etf in etfs:
-        returns = [dict(r) for r in db.get_returns(etf["id"], days=days_needed + 5)]
+        returns = [dict(r) for r in db.get_returns_range(etf["id"], lookback_date, str(today))]
         if not returns:
-            rows.append({"name": etf["name"], "ticker": etf["ticker"], "ret": None, "close": None})
+            rows.append({"name": etf["name"], "ticker": etf["ticker"], "ret": None, "close": None, "insufficient": True})
             continue
 
         returns.sort(key=lambda r: r["date"])
@@ -481,20 +561,25 @@ async def _send_returns_comparison(channel, period: str):
 
         if period == "daily":
             ret = latest["daily_return_pct"]
-        elif len(returns) >= days_needed + 1:
-            start_price = returns[-(days_needed + 1)]["close_price"]
-            end_price = latest["close_price"]
-            ret = round(((end_price / start_price) - 1) * 100, 2) if start_price else None
+        elif target_start:
+            target_str = str(target_start)
+            start_row = min(returns, key=lambda r: abs((date.fromisoformat(r["date"]) - target_start).days))
+            if abs((date.fromisoformat(start_row["date"]) - target_start).days) > 10:
+                ret = None
+            else:
+                ret = round(((latest["close_price"] / start_row["close_price"]) - 1) * 100, 2) if start_row["close_price"] else None
         else:
-            start_price = returns[0]["close_price"]
-            end_price = latest["close_price"]
-            ret = round(((end_price / start_price) - 1) * 100, 2) if start_price else None
+            if len(returns) >= 2:
+                ret = round(((latest["close_price"] / returns[0]["close_price"]) - 1) * 100, 2)
+            else:
+                ret = latest.get("daily_return_pct")
 
         rows.append({
             "name": etf["name"],
             "ticker": etf["ticker"],
             "ret": ret,
             "close": latest["close_price"],
+            "insufficient": ret is None and period not in ("daily",),
         })
 
     rows.sort(key=lambda r: r["ret"] if r["ret"] is not None else -999, reverse=True)
@@ -504,7 +589,8 @@ async def _send_returns_comparison(channel, period: str):
 
     for i, r in enumerate(rows, 1):
         if r["ret"] is None:
-            lines.append(f"{i}. **{r['name']}** ({r['ticker']}) — 데이터 없음")
+            note = "데이터 부족" if r.get("insufficient") else "데이터 없음"
+            lines.append(f"{i}. **{r['name']}** ({r['ticker']}) — {note}")
             continue
         arrow = "🔺" if r["ret"] > 0 else "🔻" if r["ret"] < 0 else "➖"
         close_str = f"{r['close']:,.2f}" if r["close"] else ""
@@ -566,12 +652,18 @@ def _find_split(text: str, limit: int) -> int:
     return limit
 
 
-async def send_report(text: str, pdf_path: str | None = None):
-    """Send report via webhook. If pdf_path is provided, attach it."""
+async def send_report(text: str, pdf_path: str | None = None, extra_files: list[str] | None = None):
+    """Send report via webhook. Attach pdf and extra files if provided."""
     if DISCORD_WEBHOOK_URL:
         try:
+            all_files = []
             if pdf_path:
-                await _send_webhook_with_file(text, pdf_path)
+                all_files.append(pdf_path)
+            if extra_files:
+                all_files.extend(extra_files)
+
+            if all_files:
+                await _send_webhook_with_files(text, all_files)
             else:
                 await _send_webhook(text)
             logger.info("Daily report sent via webhook")
@@ -579,17 +671,28 @@ async def send_report(text: str, pdf_path: str | None = None):
             logger.exception("Failed to send webhook report")
 
 
-async def _send_webhook_with_file(text: str, file_path: str):
+async def _send_webhook_with_files(text: str, file_paths: list[str]):
+    import mimetypes
     import os
-    filename = os.path.basename(file_path)
     async with httpx.AsyncClient() as client:
-        with open(file_path, "rb") as f:
+        files = []
+        open_handles = []
+        try:
+            for i, path in enumerate(file_paths):
+                name = os.path.basename(path)
+                mime = mimetypes.guess_type(path)[0] or "application/octet-stream"
+                fh = open(path, "rb")
+                open_handles.append(fh)
+                files.append((f"file{i}", (name, fh, mime)))
             resp = await client.post(
                 DISCORD_WEBHOOK_URL,
                 data={"content": text[:1900]},
-                files={"file": (filename, f, "application/pdf")},
+                files=files,
             )
             resp.raise_for_status()
+        finally:
+            for fh in open_handles:
+                fh.close()
 
 
 async def _send_webhook(text: str):

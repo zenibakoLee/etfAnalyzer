@@ -18,16 +18,24 @@ HEADERS = {
 }
 
 
-def fetch_holdings(url: str, target_date: date) -> Optional[dict]:
+def fetch_holdings(url: str, target_date: date, yf_ticker: str | None = None) -> Optional[dict]:
     """Fetch ETF holdings for a specific date. Returns None if no data available."""
+    if url.startswith("vistashares://"):
+        return _fetch_vistashares(url.removeprefix("vistashares://"))
     if url.startswith("roundhill://"):
         return _fetch_roundhill(url.removeprefix("roundhill://"), target_date)
     if url.startswith("wisdomtree://"):
         return _fetch_wisdomtree(url.removeprefix("wisdomtree://"))
+    if url.startswith("qraft://"):
+        return _fetch_qraft(url.removeprefix("qraft://"))
     if url.startswith("yfinance://"):
         return _fetch_yfinance_holdings(url.removeprefix("yfinance://"))
     if "ishares.com" in url:
-        return _fetch_ishares(url, target_date)
+        result = _fetch_ishares(url, target_date)
+        if result is None and yf_ticker:
+            logger.info("iShares fetch failed, trying yfinance for %s", yf_ticker)
+            return _fetch_yfinance_holdings(yf_ticker)
+        return result
     return _fetch_timeetf(url, target_date)
 
 
@@ -47,6 +55,17 @@ def _fetch_timeetf(url: str, target_date: date) -> Optional[dict]:
     soup = BeautifulSoup(resp.text, "lxml")
     aum_100m = _parse_timeetf_aum(soup)
     holdings = _parse_timeetf_holdings(soup)
+
+    if not holdings:
+        # pdfDate for target_date returned nothing — fetch latest available
+        fallback_params = {k: v for k, v in params.items() if k != "pdfDate"}
+        resp = requests.get(base_url, params=fallback_params, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "lxml")
+        aum_100m = _parse_timeetf_aum(soup)
+        holdings = _parse_timeetf_holdings(soup)
+        if holdings:
+            logger.info("timeetf: no data for %s, using latest available", target_date)
 
     if not holdings:
         return None
@@ -105,6 +124,11 @@ def _fetch_ishares(url: str, target_date: date) -> Optional[dict]:
     if "text/csv" not in resp.headers.get("Content-Type", ""):
         return None
 
+    if resp.text.strip().startswith("<!DOCTYPE") or resp.text.strip().startswith("<html"):
+        logger.warning("iShares returned HTML instead of CSV (bot protection), falling back to yfinance")
+        ticker = re.search(r"/products/\d+/([^/]+)", url)
+        return None
+
     return _parse_ishares_csv(resp.text)
 
 
@@ -154,6 +178,28 @@ def _parse_ishares_csv(text: str) -> Optional[dict]:
         except (ValueError, KeyError):
             continue
 
+    if not holdings:
+        return None
+
+    return {"aum_100m": None, "holdings": holdings}
+
+
+# ─── VistaShares ──────────────────────────────────────────────────────────────
+
+_VISTASHARES_CSV = "https://www.vistashares.com/csv/top-holdings"
+
+
+def _fetch_vistashares(fund_code: str) -> Optional[dict]:
+    resp = requests.get(
+        _VISTASHARES_CSV, params={"etf": fund_code},
+        headers=HEADERS, timeout=15,
+    )
+    resp.raise_for_status()
+
+    if not resp.text.strip() or resp.text.strip().startswith("<!"):
+        return None
+
+    holdings = _parse_roundhill_csv(resp.text, fund_code)
     if not holdings:
         return None
 
@@ -313,6 +359,64 @@ def _parse_wisdomtree_html(html: str, fund_code: str) -> Optional[dict]:
 
     logger.info("WisdomTree %s: fetched %d holdings", fund_code, len(holdings))
     return {'aum_100m': None, 'holdings': holdings}
+
+
+# ─── Qraft AI ETFs (cms.etc-webmaker.com) ──────────────────────────────────
+
+_QRAFT_CMS_IDS = {
+    "LQAI": 241,
+    "QRFT": 132,
+    "AMOM": 134,
+    "HDIV": 135,
+    "NVQ": 136,
+    "AIDB": 203,
+}
+
+
+def _fetch_qraft(fund_code: str) -> Optional[dict]:
+    cms_id = _QRAFT_CMS_IDS.get(fund_code.upper())
+    if cms_id is None:
+        logger.warning("No Qraft CMS ID for %s, falling back to yfinance", fund_code)
+        return _fetch_yfinance_holdings(fund_code)
+
+    resp = requests.get(
+        f"https://cms.etc-webmaker.com/holdings/{cms_id}",
+        headers=HEADERS, timeout=15,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    fin_data = data.get("finData")
+    if not fin_data:
+        return None
+
+    holdings = []
+    for h in fin_data:
+        ticker = (h.get("ticker") or "").strip()
+        name = (h.get("description") or "").strip()
+        if not name:
+            continue
+        try:
+            qty = int(h.get("quantity", 0))
+            mv_str = (h.get("market_value") or "0").replace(",", "")
+            mv = int(float(mv_str))
+            pct_str = (h.get("percent_of_nav") or "0%").replace("%", "").strip()
+            pct = float(pct_str)
+        except (ValueError, TypeError):
+            continue
+        holdings.append({
+            "ticker_code": ticker or name[:12],
+            "stock_name": name,
+            "quantity": qty,
+            "valuation_krw": mv,
+            "weight_pct": pct,
+        })
+
+    if not holdings:
+        return None
+
+    logger.info("Qraft %s: fetched %d holdings", fund_code, len(holdings))
+    return {"aum_100m": None, "holdings": holdings}
 
 
 # ─── yfinance (fallback) ────────────────────────────────────────────────────

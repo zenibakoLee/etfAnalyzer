@@ -341,6 +341,32 @@ def _build_message(date_str: str, headline: str, sections: list, returns_summary
     return "\n".join(parts)
 
 
+_SKIP_SECTION_HEADERS = ("오늘의 주요 변화", "운용 의도 분석", "핵심 요약", "날짜:", "베이스라인:")
+
+
+def _extract_key_line(report: str) -> str:
+    """First substantive line of an LLM report for the compact Discord summary.
+
+    LLM output format varies — some reports open with markdown headings
+    ('## TIME 나스닥100 — 분석') or bold metadata, which are useless as a
+    one-line summary. Skip structural markup and known section headers;
+    bold *content* lines (e.g. '**대규모 리밸런싱 — 신규 49종목**') are kept.
+    """
+    for line in report.split("\n"):
+        stripped = line.strip()
+        if not stripped or len(stripped) <= 5:
+            continue
+        if stripped.startswith(("#", "---", "|", "```", ">")):
+            continue
+        plain = stripped.strip("*").strip()
+        if len(plain) <= 5:
+            continue
+        if any(h in plain[:25] for h in _SKIP_SECTION_HEADERS):
+            continue
+        return _truncate_to_sentence(plain, 120)
+    return ""
+
+
 def _truncate_to_sentence(text: str, max_len: int) -> str:
     if len(text) <= max_len:
         return text
@@ -388,12 +414,7 @@ def _build_compact_message(
         for section in changed_sections:
             name, ticker, report = section[0], section[1], section[2]
             label = _etf_short_name(name, ticker)
-            first_line = ""
-            for line in report.split("\n"):
-                stripped = line.strip()
-                if stripped and not stripped.startswith("**") and len(stripped) > 5:
-                    first_line = _truncate_to_sentence(stripped, 120)
-                    break
+            first_line = _extract_key_line(report)
             if first_line:
                 parts.append(f"• **{label}** ({ticker}): {first_line}")
 

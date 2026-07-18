@@ -25,6 +25,7 @@ def _market_for_etf(etf: dict) -> str:
 
 
 _CONSENSUS_TUNNEL = "/Users/haejoonlee/dev/investmentConsensus/logs/tunnel-url.txt"
+_CONSENSUS_DB = "/Users/haejoonlee/dev/investmentConsensus/db/consensus.db"
 
 
 def _dashboard_link() -> str:
@@ -34,6 +35,45 @@ def _dashboard_link() -> str:
         return f"{url}/etf" if url else ""
     except OSError:
         return ""
+
+
+def _leverage_stage_change() -> str:
+    """investmentConsensus의 레버리지 사이클 단계 전환 감지 (read-only).
+
+    Tech Cycle Score가 매일 계산하는 leverage_daily.stage의 최근 이틀을 비교해
+    단계가 바뀐 경우에만 리포트 라인을 반환한다.
+    """
+    import sqlite3
+    try:
+        conn = sqlite3.connect(f"file:{_CONSENSUS_DB}?mode=ro", uri=True)
+        rows = conn.execute(
+            "SELECT date, stage FROM leverage_daily WHERE stage IS NOT NULL ORDER BY date DESC LIMIT 2"
+        ).fetchall()
+        conn.close()
+    except Exception:
+        logger.exception("leverage stage check failed")
+        return ""
+    if len(rows) < 2:
+        return ""
+    (cur_date, cur_stage), (_, prev_stage) = rows
+    if cur_stage == prev_stage:
+        return ""
+    guide = {
+        "축적기": "레버리지가 빠르게 쌓이는 중 — 과열 경계",
+        "청산 초기": "강제청산 진행 — 추가 변동성 주의",
+        "청산 후반": "레버리지 대부분 정리 — 횡보 후 수급 회복 가능 구간",
+        "정상화": "레버리지·변동성 안정 — 정상 배분",
+        "혼조": "지표 혼재 — 단계 전환 구간일 가능성",
+    }.get(cur_stage, "")
+    try:
+        base = open(_CONSENSUS_TUNNEL).read().strip()
+        link = f"\n   → {base}/cycle" if base else ""
+    except OSError:
+        link = ""
+    return (
+        f"\n🧨 **레버리지 사이클 단계 전환** ({cur_date}): {prev_stage} → **{cur_stage}**\n"
+        f"   {guide}{link}"
+    )
 
 
 _EXCHANGE_CALENDARS: dict[str, object] = {}
@@ -417,6 +457,10 @@ def _build_compact_message(
             first_line = _extract_key_line(report)
             if first_line:
                 parts.append(f"• **{label}** ({ticker}): {first_line}")
+
+    lev_change = _leverage_stage_change()
+    if lev_change:
+        parts.append(lev_change)
 
     if scrape_failures:
         parts.append("\n🚨 **크롤링 실패**")

@@ -76,6 +76,67 @@ def _leverage_stage_change() -> str:
     )
 
 
+def _cycle_rotation_change() -> str:
+    """investmentConsensus 경기사이클(biz_cycle_daily)의 국가별 선호업종/대장주 전환 감지.
+
+    각국 증시 사이클 위상이 바뀌면 선호 업종(favored_with_leaders)의 선두가 교체된다.
+    최근 이틀 payload를 비교해 선두 업종·대장주가 바뀐 나라만 리포트한다.
+    """
+    import sqlite3
+    import json
+
+    try:
+        conn = sqlite3.connect(f"file:{_CONSENSUS_DB}?mode=ro", uri=True)
+        rows = conn.execute(
+            "SELECT date, payload_json FROM biz_cycle_daily ORDER BY date DESC LIMIT 2"
+        ).fetchall()
+        conn.close()
+    except Exception:
+        logger.exception("cycle rotation check failed")
+        return ""
+    if len(rows) < 2:
+        return ""
+
+    def _lead(payload_json):
+        """{country_label: (증시국면, 선두업종, 대장주)}"""
+        out = {}
+        try:
+            data = json.loads(payload_json)
+        except Exception:
+            return out
+        for c in (data.get("countries") or {}).values():
+            eq = c.get("equity") or {}
+            leaders = eq.get("favored_with_leaders") or []
+            if leaders:
+                out[f"{c.get('flag', '')} {c.get('label', '')}"] = (
+                    eq.get("quadrant", ""), leaders[0].get("sector", ""), leaders[0].get("leader", ""),
+                )
+        return out
+
+    cur_date, cur_payload = rows[0]
+    cur, prev = _lead(cur_payload), _lead(rows[1][1])
+
+    changes = []
+    for country, (quadrant, sector, leader) in cur.items():
+        prev_entry = prev.get(country)
+        if prev_entry and prev_entry[1] != sector:
+            leader_str = f" · {leader}" if leader else ""
+            changes.append(f"   {country}: {prev_entry[1]} → **{sector}**{leader_str} ({quadrant})")
+    if not changes:
+        return ""
+
+    try:
+        base = open(_CONSENSUS_TUNNEL).read().strip()
+        link = f"\n   → {base}/rotation" if base else ""
+    except OSError:
+        link = ""
+    return (
+        f"\n🔄 **증시사이클 선호업종 전환** ({cur_date})\n"
+        + "\n".join(changes)
+        + link
+    )
+
+
 _EXCHANGE_CALENDARS: dict[str, object] = {}
 
 _YF_BENCHMARK = {"US": "SPY", "KR": "005930.KS"}
@@ -461,6 +522,10 @@ def _build_compact_message(
     lev_change = _leverage_stage_change()
     if lev_change:
         parts.append(lev_change)
+
+    rotation_change = _cycle_rotation_change()
+    if rotation_change:
+        parts.append(rotation_change)
 
     if scrape_failures:
         parts.append("\n🚨 **크롤링 실패**")

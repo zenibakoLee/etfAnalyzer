@@ -904,7 +904,11 @@ async def _recovery_check(send_fn: Callable[..., Awaitable]):
 
 
 def setup_scheduler(send_fn: Callable[..., Awaitable]) -> AsyncIOScheduler:
+    import os
     scheduler = AsyncIOScheduler(timezone=KST)
+    if os.getenv("SCHEDULER_ENABLED", "true").lower() == "false":
+        logger.warning("ETF scheduler DISABLED (SCHEDULER_ENABLED=false) — 일일/주간 잡 미등록")
+        return scheduler
     scheduler.add_job(
         run_daily_job,
         trigger="cron",

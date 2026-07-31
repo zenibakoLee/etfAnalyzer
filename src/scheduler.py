@@ -395,6 +395,41 @@ async def run_daily_job(send_fn: Callable[..., Awaitable]):
     logger.info("Daily report sent")
 
 
+async def run_scrape_only_job():
+    """비중변화 스크래핑만 실행 — 스냅샷/수익률 저장까지. LLM 리포트·헤드라인·
+    코믹·PDF·전송 없음(무비용). ETF_SCRAPE_ONLY 모드에서 사용."""
+    today = datetime.now(KST).date()
+    today_str = str(today)
+    logger.info(f"Scrape-only job started for {today_str}")
+
+    etfs = db.get_all_etfs()
+    # 수익률(yfinance, 무료) — 대시보드 표시용
+    try:
+        await _collect_daily_returns(etfs, today_str)
+    except Exception:
+        logger.exception("scrape-only: returns collection failed")
+
+    closed_markets = _detect_closed_markets(today)
+    saved = 0
+    for etf in etfs:
+        etf = dict(etf)
+        if etf.get("benchmark"):
+            continue
+        if _market_for_etf(etf) in closed_markets:
+            continue
+        try:
+            await _backfill_gaps(etf, today)
+            data = scraper.fetch_holdings(etf["url"], today, yf_ticker=etf.get("yf_ticker"))
+            if not data:
+                db.save_no_data_date(etf["id"], today_str)
+                continue
+            db.save_snapshot(etf["id"], today_str, data["aum_100m"], data["holdings"])
+            saved += 1
+        except Exception:
+            logger.exception(f"scrape-only: error for {etf['name']}")
+    logger.info(f"Scrape-only job done: {saved} snapshots saved (LLM 리포트 없음)")
+
+
 def _build_all_changes(etf: dict) -> list:
     snapshots = db.get_all_snapshots(etf["id"])
     if len(snapshots) < 2:
@@ -906,9 +941,30 @@ async def _recovery_check(send_fn: Callable[..., Awaitable]):
 def setup_scheduler(send_fn: Callable[..., Awaitable]) -> AsyncIOScheduler:
     import os
     scheduler = AsyncIOScheduler(timezone=KST)
-    if os.getenv("SCHEDULER_ENABLED", "true").lower() == "false":
-        logger.warning("ETF scheduler DISABLED (SCHEDULER_ENABLED=false) — 일일/주간 잡 미등록")
+    enabled = os.getenv("SCHEDULER_ENABLED", "true").lower() != "false"
+    scrape_only = os.getenv("ETF_SCRAPE_ONLY", "false").lower() == "true"
+
+    if not enabled:
+        # 전체 스케줄러는 꺼졌지만 비중변화 스크래핑만 유지하는 모드
+        if scrape_only:
+            scheduler.add_job(
+                run_scrape_only_job,
+                trigger="cron",
+                hour=SCHEDULE_HOUR,
+                minute=SCHEDULE_MINUTE,
+                id="daily_scrape_only",
+                replace_existing=True,
+                misfire_grace_time=300,
+            )
+            scheduler.start()
+            logger.warning(
+                f"ETF SCRAPE-ONLY 모드: 비중변화 스크래핑만 {SCHEDULE_HOUR:02d}:{SCHEDULE_MINUTE:02d} KST "
+                "(LLM 리포트·코믹·전송 없음)"
+            )
+        else:
+            logger.warning("ETF scheduler DISABLED (SCHEDULER_ENABLED=false) — 일일/주간 잡 미등록")
         return scheduler
+
     scheduler.add_job(
         run_daily_job,
         trigger="cron",
